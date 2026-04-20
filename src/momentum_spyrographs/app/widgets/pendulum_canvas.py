@@ -49,7 +49,7 @@ class PendulumCanvas(QWidget):
         del event
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.fillRect(self.rect(), QColor("#101622"))
+        painter.fillRect(self.rect(), QColor("#0a0f1c"))
 
         pivot, bob1, bob2 = self._bob_positions()
         rod_pen = QPen(QColor("#d7e4f8"), 3)

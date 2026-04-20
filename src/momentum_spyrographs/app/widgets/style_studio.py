@@ -2,13 +2,36 @@ from __future__ import annotations
 
 import re
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QRectF, Qt, Signal
+from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import QCheckBox, QComboBox, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QPushButton, QSlider, QVBoxLayout, QWidget
 
 from momentum_spyrographs.core.models import RenderSettings
 
 
 HEX_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
+
+
+class ColorIndicator(QWidget):
+    """Small swatch that previews the current hex color value."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setFixedSize(28, 28)
+        self._color = "#000000"
+
+    def set_color(self, hex_color: str) -> None:
+        if HEX_RE.match(hex_color.strip()):
+            self._color = hex_color.strip()
+            self.update()
+
+    def paintEvent(self, event) -> None:  # type: ignore[override]
+        del event
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QPen(QColor(255, 255, 255, 40), 1))
+        painter.setBrush(QColor(self._color))
+        painter.drawRoundedRect(QRectF(2, 2, 24, 24), 6, 6)
 
 
 class StyleStudio(QWidget):
@@ -19,6 +42,7 @@ class StyleStudio(QWidget):
         super().__init__(parent)
         self._syncing = False
         self._hex_fields: dict[str, QLineEdit] = {}
+        self._color_indicators: dict[str, ColorIndicator] = {}
         self._combos: dict[str, QComboBox] = {}
         self._value_labels: dict[str, QLabel] = {}
         self._sliders: dict[str, QSlider] = {}
@@ -112,12 +136,24 @@ class StyleStudio(QWidget):
         self._combos[field_name] = combo
         return combo
 
-    def _hex_edit(self, field_name: str) -> QLineEdit:
-        edit = QLineEdit(self)
+    def _hex_edit(self, field_name: str) -> QWidget:
+        row = QWidget(self)
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(6)
+
+        indicator = ColorIndicator(row)
+        self._color_indicators[field_name] = indicator
+
+        edit = QLineEdit(row)
         edit.setPlaceholderText("#000000")
+        edit.textChanged.connect(lambda text: indicator.set_color(text))
         edit.editingFinished.connect(lambda field=field_name, target=edit: self._emit_hex(field, target))
         self._hex_fields[field_name] = edit
-        return edit
+
+        row_layout.addWidget(indicator)
+        row_layout.addWidget(edit, 1)
+        return row
 
     def _slider_row(self, field_name: str, minimum: int, maximum: int, label: str) -> QWidget:
         widget = QWidget(self)

@@ -3,11 +3,19 @@ from __future__ import annotations
 import numpy as np
 
 from momentum_spyrographs.core.discovery import compute_seed_metrics, search_creative_candidates
-from momentum_spyrographs.core.models import CreativeControls, PendulumSeed, PresetRecord, RenderSettings, create_preset_record
+from momentum_spyrographs.core.map_tiles import default_viewport, structural_seed_key, visible_tiles
+from momentum_spyrographs.core.models import (
+    CreativeControls,
+    MapRequest,
+    PendulumSeed,
+    PresetRecord,
+    RenderSettings,
+    create_preset_record,
+)
 from momentum_spyrographs.core.presets import PresetStore
 from momentum_spyrographs.core.project import simulate_projected_points
 from momentum_spyrographs.core.render import write_gif, write_svg
-from momentum_spyrographs.core.stability_map import sample_stability_map
+from momentum_spyrographs.core.stability_map import render_map_level, sample_stability_map
 
 
 def test_simulation_is_deterministic_and_has_expected_shape() -> None:
@@ -42,8 +50,37 @@ def test_stability_map_returns_color_grid_and_axes() -> None:
     assert payload.image.shape == (9, 9, 3)
     assert payload.periodicity.shape == (9, 9)
     assert payload.chaos.shape == (9, 9)
-    assert payload.omega1_values.shape == (9,)
-    assert payload.omega2_values.shape == (9,)
+    assert payload.viewport_omega1_min < payload.viewport_omega1_max
+    assert payload.viewport_omega2_min < payload.viewport_omega2_max
+
+
+def test_structural_key_excludes_selected_start_speeds() -> None:
+    seed_a = PendulumSeed(omega1=1.0, omega2=-2.0)
+    seed_b = seed_a.with_updates(omega1=8.0, omega2=7.0)
+    assert structural_seed_key(seed_a) == structural_seed_key(seed_b)
+
+
+def test_render_map_level_returns_finite_high_resolution_payload() -> None:
+    seed = PendulumSeed(duration=6.0, dt=0.03, theta1=0.4, theta2=-0.2)
+    viewport = default_viewport(seed, pixel_size=64)
+    request = MapRequest(
+        seed=seed,
+        viewport=viewport,
+        structural_key=structural_seed_key(seed),
+        selected_omega1=seed.omega1,
+        selected_omega2=seed.omega2,
+    )
+    payload = render_map_level(request, resolution_level=64, tile_size=32)
+    assert payload.image.shape == (64, 64, 3)
+    assert np.isfinite(payload.periodicity).all()
+    assert np.isfinite(payload.chaos).all()
+
+
+def test_visible_tiles_cover_requested_level() -> None:
+    viewport = default_viewport(PendulumSeed(), pixel_size=128)
+    tiles = visible_tiles(viewport, resolution_level=128, tile_size=64)
+    assert len(tiles) == 4
+    assert sum(tile.pixel_width * tile.pixel_height for tile in tiles) == 128 * 128
 
 
 def test_projected_points_filter_non_finite_rows() -> None:

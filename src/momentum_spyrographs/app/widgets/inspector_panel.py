@@ -148,6 +148,10 @@ class InspectorPanel(QWidget):
         length_layout.addWidget(length_slider, 1)
         length_layout.addWidget(length_label)
 
+        direction.setToolTip("Rotation direction of this arm")
+        energy_slider.setToolTip("Angular velocity \u2014 how fast this arm spins")
+        length_slider.setToolTip("Physical length of this arm")
+
         form.addRow("Direction", direction)
         form.addRow("Energy", energy_row)
         form.addRow("Length", length_row)

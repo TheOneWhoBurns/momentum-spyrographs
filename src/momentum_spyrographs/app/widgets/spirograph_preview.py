@@ -161,31 +161,42 @@ class SpirographPreview(QWidget):
 
     def _build_ui(self) -> None:
         self.status_label.setObjectName("previewStatusLabel")
+        self.status_label.setStyleSheet("color: #6b83a8; font-size: 12px;")
         self._descriptor_label.setObjectName("descriptorLabel")
+        self._descriptor_label.setStyleSheet("color: #ffb38f; font-weight: 600; font-size: 15px;")
 
         play_button = QPushButton("Play", self)
         pause_button = QPushButton("Pause", self)
         restart_button = QPushButton("Restart", self)
+        for btn in (play_button, pause_button, restart_button):
+            btn.setObjectName("secondaryBtn")
+            btn.setFixedHeight(30)
         play_button.clicked.connect(self.canvas.play)
         pause_button.clicked.connect(self.canvas.pause)
         restart_button.clicked.connect(self.canvas.restart)
 
         top_row = QHBoxLayout()
+        top_row.setSpacing(8)
         top_row.addWidget(self._descriptor_label)
-        top_row.addWidget(self.status_label)
         top_row.addStretch(1)
+        top_row.addWidget(self.status_label)
         top_row.addWidget(play_button)
         top_row.addWidget(pause_button)
         top_row.addWidget(restart_button)
 
         badge_row = QHBoxLayout()
+        badge_row.setSpacing(6)
         for badge in self._badges:
-            badge.setStyleSheet("background:#24324a; color:#e9f0ff; border-radius:10px; padding:4px 8px;")
+            badge.setStyleSheet(
+                "background: #141e34; color: #b8c9e4; border: 1px solid #1c2d4a;"
+                " border-radius: 10px; padding: 4px 10px; font-size: 11px;"
+            )
             badge_row.addWidget(badge)
         badge_row.addStretch(1)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
         layout.addLayout(top_row)
         layout.addLayout(badge_row)
         layout.addWidget(self.canvas, 1)

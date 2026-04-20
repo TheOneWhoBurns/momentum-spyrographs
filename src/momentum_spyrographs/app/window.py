@@ -65,10 +65,10 @@ class MainWindow(QMainWindow):
         center = QWidget(self)
         center_layout = QVBoxLayout(center)
         center_layout.setContentsMargins(0, 0, 0, 0)
-        center_layout.setSpacing(12)
+        center_layout.setSpacing(14)
 
         top_row = QHBoxLayout()
-        top_row.setSpacing(12)
+        top_row.setSpacing(14)
         top_row.addWidget(self._card("Pendulum Setup", self.setup_panel), 7)
         top_row.addWidget(self._card("Start-State Map", self.map_panel), 5)
         center_layout.addLayout(top_row)
@@ -77,14 +77,14 @@ class MainWindow(QMainWindow):
         left = QWidget(self)
         left_layout = QVBoxLayout(left)
         left_layout.setContentsMargins(0, 0, 0, 0)
-        left_layout.setSpacing(12)
+        left_layout.setSpacing(14)
         left_layout.addWidget(CollapsiblePanel("Saved Creations", self.library, parent=left))
         left_layout.addStretch(1)
 
         right = QWidget(self)
         right_layout = QVBoxLayout(right)
         right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.setSpacing(12)
+        right_layout.setSpacing(14)
         right_layout.addWidget(CollapsiblePanel("Style Studio", self.style_studio, parent=right), 1)
         right_layout.addStretch(1)
 
@@ -102,11 +102,15 @@ class MainWindow(QMainWindow):
     def _card(self, title: str, body: QWidget) -> QWidget:
         container = QWidget(self)
         layout = QVBoxLayout(container)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(12)
+        layout.setContentsMargins(16, 14, 16, 16)
+        layout.setSpacing(10)
         title_label = QLabel(title, container)
         title_label.setObjectName("cardTitle")
         layout.addWidget(title_label)
+        separator = QWidget(container)
+        separator.setFixedHeight(1)
+        separator.setStyleSheet("background: #1c2d4a;")
+        layout.addWidget(separator)
         layout.addWidget(body, 1)
         container.setObjectName("card")
         return container
@@ -139,9 +143,11 @@ class MainWindow(QMainWindow):
     def _connect_signals(self) -> None:
         self.state.documentChanged.connect(self._sync_ui_from_state)
         self.state.previewRequested.connect(self.preview_worker.request_preview)
-        self.state.documentChanged.connect(self.map_worker.request_map)
+        self.state.mapRequested.connect(self.map_worker.request_map)
         self.state.previewStatusChanged.connect(lambda status: self.preview.set_status(status, self._latest_preview_error))
         self.state.previewResultChanged.connect(self._sync_preview_payload)
+        self.state.mapStatusChanged.connect(lambda status: self.map_panel.set_status(status, self._latest_map_error))
+        self.state.mapResultChanged.connect(self.map_panel.set_payload)
         self.state.presetChanged.connect(lambda _: self._update_window_title())
         self.state.dirtyChanged.connect(lambda _: self._update_window_title())
 
@@ -160,6 +166,7 @@ class MainWindow(QMainWindow):
             lambda key, value: self.state.update_seed(**{key: value})
         )
         self.map_panel.seedSelected.connect(self._apply_map_seed)
+        self.map_panel.viewportChanged.connect(self.state.update_map_viewport)
 
         self.library.newRequested.connect(self.new_draft)
         self.library.saveRequested.connect(self.save_current)
@@ -177,6 +184,7 @@ class MainWindow(QMainWindow):
         self.style_studio.set_render_settings(document.render_settings)
         self.preview.set_render_settings(document.render_settings)
         self.setup_panel.set_document(document.seed)
+        self.map_panel.set_viewport(self.state.map_viewport)
         self._update_window_title()
 
     def _sync_preview_payload(self, payload) -> None:
@@ -208,23 +216,26 @@ class MainWindow(QMainWindow):
     def _handle_map_started(self, request_id: int) -> None:
         self._latest_map_id = request_id
         self._latest_map_error = ""
-        self.map_panel.set_status("loading")
+        self.state.set_map_status("loading")
 
     def _handle_map_ready(self, request_id: int, payload) -> None:
         if request_id != self._latest_map_id:
             return
         self._latest_map_error = ""
-        self.map_panel.set_payload(payload)
+        self.state.set_map_payload(payload)
+        if getattr(payload, "resolution_level", 0) >= 512:
+            self.state.set_map_status("idle")
 
     def _handle_map_failed(self, request_id: int, message: str) -> None:
         if request_id != self._latest_map_id:
             return
         self._latest_map_error = message
+        self.state.set_map_status("error")
         self.map_panel.set_status("error", error=message)
         self.statusBar().showMessage(f"Map failed: {message}", 6000)
 
     def _apply_map_seed(self, omega1: float, omega2: float) -> None:
-        self.state.update_seed(omega1=omega1, omega2=omega2)
+        self.state.update_map_selection(omega1=omega1, omega2=omega2)
 
     def refresh_library(self) -> None:
         presets = self.store.list_presets(

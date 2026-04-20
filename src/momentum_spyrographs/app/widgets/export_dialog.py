@@ -37,6 +37,7 @@ class ExportDialog(QDialog):
         self._build_ui(render_settings)
 
     def _build_ui(self, render_settings: RenderSettings) -> None:
+        self.setMinimumWidth(480)
         self.kind_combo.addItems(["svg", "gif"])
         self.kind_combo.currentTextChanged.connect(self._sync_path_extension)
         self.kind_combo.currentTextChanged.connect(self._sync_fidelity_options)
@@ -68,8 +69,10 @@ class ExportDialog(QDialog):
         form.addRow("FPS", self.fps_spin)
 
         buttons = QHBoxLayout()
+        buttons.setSpacing(10)
         save_button = QPushButton("Export", self)
         cancel_button = QPushButton("Cancel", self)
+        cancel_button.setObjectName("secondaryBtn")
         save_button.clicked.connect(self.accept)
         cancel_button.clicked.connect(self.reject)
         buttons.addStretch(1)

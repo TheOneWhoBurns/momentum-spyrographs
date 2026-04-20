@@ -6,11 +6,13 @@ from PySide6.QtCore import Qt, QSignalBlocker, Signal
 from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
-    QGridLayout,
+    QHBoxLayout,
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QMenu,
     QPushButton,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -39,33 +41,62 @@ class PresetLibrary(QWidget):
         self._build_ui()
 
     def _build_ui(self) -> None:
-        self.search_input.setPlaceholderText("Search presets")
+        self.search_input.setPlaceholderText("Search creations\u2026")
         self.search_input.textChanged.connect(self.searchChanged.emit)
         self.show_archived.toggled.connect(self.archivedFilterChanged.emit)
         self.list_widget.currentItemChanged.connect(self._emit_current_item)
         self.list_widget.setIconSize(QPixmap(72, 72).size())
         self.list_widget.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
 
-        button_grid = QGridLayout()
-        buttons = [
-            ("New", self.newRequested),
-            ("Save", self.saveRequested),
-            ("Save As", self.saveAsRequested),
-            ("Rename", self.renameRequested),
-            ("Duplicate", self.duplicateRequested),
-            ("Archive", self.archiveRequested),
-            ("Restore", self.restoreRequested),
-            ("Delete", self.deleteRequested),
-        ]
-        for index, (label, signal) in enumerate(buttons):
-            button = QPushButton(label, self)
-            button.clicked.connect(signal.emit)
-            button_grid.addWidget(button, index // 2, index % 2)
+        toolbar = QHBoxLayout()
+        toolbar.setSpacing(6)
+
+        new_btn = QPushButton("+ New", self)
+        new_btn.setFixedHeight(32)
+        new_btn.clicked.connect(self.newRequested.emit)
+
+        save_btn = QPushButton("Save", self)
+        save_btn.setObjectName("secondaryBtn")
+        save_btn.setFixedHeight(32)
+        save_btn.clicked.connect(self.saveRequested.emit)
+
+        more_menu = QMenu(self)
+        save_as_action = more_menu.addAction("Save As\u2026")
+        save_as_action.triggered.connect(self.saveAsRequested.emit)
+        rename_action = more_menu.addAction("Rename")
+        rename_action.triggered.connect(self.renameRequested.emit)
+        duplicate_action = more_menu.addAction("Duplicate")
+        duplicate_action.triggered.connect(self.duplicateRequested.emit)
+        more_menu.addSeparator()
+        archive_action = more_menu.addAction("Archive")
+        archive_action.triggered.connect(self.archiveRequested.emit)
+        restore_action = more_menu.addAction("Restore")
+        restore_action.triggered.connect(self.restoreRequested.emit)
+        more_menu.addSeparator()
+        delete_action = more_menu.addAction("Delete")
+        delete_action.triggered.connect(self.deleteRequested.emit)
+
+        more_btn = QToolButton(self)
+        more_btn.setText("\u22EF")
+        more_btn.setFixedSize(32, 32)
+        more_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        more_btn.setMenu(more_menu)
+        more_btn.setStyleSheet(
+            "QToolButton { font-size: 18px; font-weight: 700; }"
+            "QToolButton::menu-indicator { width: 0; height: 0; }"
+        )
+
+        toolbar.addWidget(new_btn)
+        toolbar.addWidget(save_btn)
+        toolbar.addStretch(1)
+        toolbar.addWidget(more_btn)
 
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+        layout.addLayout(toolbar)
         layout.addWidget(self.search_input)
         layout.addWidget(self.show_archived)
-        layout.addLayout(button_grid)
         layout.addWidget(self.list_widget, 1)
 
     def current_preset_id(self) -> str | None:

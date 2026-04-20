@@ -174,15 +174,59 @@ class PreviewPayload:
 
 
 @dataclass(frozen=True)
+class MapViewport:
+    center_omega1: float = 0.0
+    center_omega2: float = 0.0
+    span_omega1: float = 8.0
+    span_omega2: float = 8.0
+    pixel_width: int = 512
+    pixel_height: int = 512
+
+    @property
+    def omega1_min(self) -> float:
+        return self.center_omega1 - 0.5 * self.span_omega1
+
+    @property
+    def omega1_max(self) -> float:
+        return self.center_omega1 + 0.5 * self.span_omega1
+
+    @property
+    def omega2_min(self) -> float:
+        return self.center_omega2 - 0.5 * self.span_omega2
+
+    @property
+    def omega2_max(self) -> float:
+        return self.center_omega2 + 0.5 * self.span_omega2
+
+    def with_updates(self, **kwargs: Any) -> "MapViewport":
+        return replace(self, **kwargs)
+
+
+@dataclass(frozen=True)
+class MapRequest:
+    seed: PendulumSeed
+    viewport: MapViewport
+    structural_key: tuple[float, ...]
+    selected_omega1: float
+    selected_omega2: float
+
+
+@dataclass(frozen=True)
 class StabilityMapPayload:
-    omega1_values: np.ndarray
-    omega2_values: np.ndarray
     image: np.ndarray
     periodicity: np.ndarray
     chaos: np.ndarray
     overlay_seed: PendulumSeed
     selected_omega1: float
     selected_omega2: float
+    viewport_omega1_min: float
+    viewport_omega1_max: float
+    viewport_omega2_min: float
+    viewport_omega2_max: float
+    resolution_level: int
+    tile_size: int
+    pending_tiles: int
+    completed_tiles: int
 
 
 @dataclass(frozen=True)
