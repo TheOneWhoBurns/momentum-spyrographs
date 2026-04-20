@@ -42,6 +42,10 @@ def normalize_points(
     height: int,
     padding: float = 0.08,
 ) -> np.ndarray:
+    finite_mask = np.isfinite(points).all(axis=1)
+    points = points[finite_mask]
+    if len(points) == 0:
+        return np.empty((0, 2), dtype=float)
     mins = points.min(axis=0)
     maxs = points.max(axis=0)
     spans = np.maximum(maxs - mins, 1e-9)

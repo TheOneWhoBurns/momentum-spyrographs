@@ -31,6 +31,22 @@ def test_pendulum_canvas_drag_emits_updated_angles(qtbot) -> None:
     assert theta2 == canvas._seed.theta2
 
 
+def test_pendulum_canvas_total_visual_length_changes_with_shorter_arms(qtbot) -> None:
+    canvas = PendulumCanvas()
+    canvas.resize(420, 320)
+    qtbot.addWidget(canvas)
+    canvas.show()
+
+    pivot_default, bob1_default, bob2_default = canvas._bob_positions()
+    default_total = canvas._distance(pivot_default, bob1_default) + canvas._distance(bob1_default, bob2_default)
+
+    canvas.set_seed(canvas._seed.with_updates(length1=0.5, length2=0.5))
+    pivot_short, bob1_short, bob2_short = canvas._bob_positions()
+    short_total = canvas._distance(pivot_short, bob1_short) + canvas._distance(bob1_short, bob2_short)
+
+    assert short_total < default_total
+
+
 def test_main_window_recomputes_preview_after_setup_change(qtbot, tmp_path) -> None:
     window = MainWindow(preset_root=tmp_path)
     qtbot.addWidget(window)
@@ -38,6 +54,7 @@ def test_main_window_recomputes_preview_after_setup_change(qtbot, tmp_path) -> N
 
     qtbot.waitUntil(lambda: window.state.preview_payload is not None, timeout=5000)
     qtbot.waitUntil(lambda: window.map_panel._payload is not None, timeout=8000)
+    assert window.map_panel._canvas._pixmap is not None
     window.setup_panel._energy_sliders[1].setValue(250)
     window.setup_panel._length_sliders[1].setValue(175)
     qtbot.waitUntil(
@@ -61,8 +78,8 @@ def test_advanced_panel_expands_and_map_click_updates_seed(qtbot, tmp_path) -> N
     assert window.setup_panel._content.isVisible()
 
     qtbot.waitUntil(lambda: window.map_panel._payload is not None, timeout=8000)
-    map_rect = window.map_panel._map_rect()
-    window.map_panel.mousePressEvent(_FakeMouseEvent(map_rect.center()))
+    map_rect = window.map_panel._canvas._map_rect()
+    window.map_panel._canvas.mousePressEvent(_FakeMouseEvent(map_rect.center()))
     qtbot.waitUntil(lambda: abs(window.state.seed.omega1) < 0.4 and abs(window.state.seed.omega2) < 0.4, timeout=5000)
     window.preview_worker.shutdown()
     window.map_worker.shutdown()

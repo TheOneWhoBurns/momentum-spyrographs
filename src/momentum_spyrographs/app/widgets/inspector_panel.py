@@ -119,7 +119,7 @@ class InspectorPanel(QWidget):
         self._direction_boxes[arm_index] = direction
 
         energy_slider = QSlider(Qt.Orientation.Horizontal, group)
-        energy_slider.setRange(0, 600)
+        energy_slider.setRange(0, 1000)
         energy_slider.valueChanged.connect(lambda value, arm=arm_index: self._update_energy_label(arm, value))
         energy_slider.valueChanged.connect(lambda _value, arm=arm_index: self._emit_arm_velocity(arm))
         self._energy_sliders[arm_index] = energy_slider

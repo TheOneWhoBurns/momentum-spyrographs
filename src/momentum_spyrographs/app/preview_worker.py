@@ -57,6 +57,8 @@ class PreviewWorker(QObject):
             dt=max(document.seed.dt, 0.02),
         )
         points = simulate_projected_points(preview_seed, max_points=1800)
+        if len(points) < 2:
+            raise ValueError("Simulation diverged at this energy. Lower the arm energy or shorten the duration.")
         metrics = compute_seed_metrics(preview_seed, points)
         return PreviewPayload(
             document=document,

@@ -56,7 +56,7 @@ def sample_stability_map(
     grid_size: int = 21,
     velocity_limit: float | None = None,
 ) -> StabilityMapPayload:
-    velocity_span = velocity_limit or max(3.0, min(6.0, max(abs(seed.omega1), abs(seed.omega2), 2.4) + 1.2))
+    velocity_span = velocity_limit or max(3.0, min(10.0, max(abs(seed.omega1), abs(seed.omega2), 2.4) + 1.2))
     omega1_values = np.linspace(-velocity_span, velocity_span, grid_size, dtype=np.float64)
     omega2_values = np.linspace(-velocity_span, velocity_span, grid_size, dtype=np.float64)
 
@@ -76,6 +76,13 @@ def sample_stability_map(
             candidate = preview_seed.with_updates(omega1=float(omega1), omega2=float(omega2))
             _, states = simulate(candidate.to_config())
             points = project_points(states, candidate, "trace")
+            finite_mask = np.isfinite(points).all(axis=1)
+            points = points[finite_mask]
+            if len(points) < 24:
+                periodicity[row_index, col_index] = 0.0
+                chaos[row_index, col_index] = 1.0
+                image[row_index, col_index] = _map_color(0.0, 1.0, 0.0)
+                continue
             if len(points) > 420:
                 sample_indices = np.linspace(0, len(points) - 1, 420, dtype=int)
                 metric_points = points[sample_indices]

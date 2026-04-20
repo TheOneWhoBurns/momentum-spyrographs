@@ -62,6 +62,8 @@ def simulate_projected_points(
 ) -> np.ndarray:
     _, states = simulate(seed.to_config())
     points = project_points(states, seed, seed.space)
+    finite_mask = np.isfinite(points).all(axis=1)
+    points = points[finite_mask]
     if max_points is not None and len(points) > max_points:
         indices = np.linspace(0, len(points) - 1, max_points, dtype=int)
         return points[indices]

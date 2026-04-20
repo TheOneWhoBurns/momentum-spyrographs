@@ -76,8 +76,8 @@ class PendulumCanvas(QWidget):
         painter.drawText(18, 28, "Drag the bobs to set initial angles")
 
     def _geometry(self) -> tuple[QPointF, float, float]:
-        total_length = max(self._seed.length1 + self._seed.length2, 0.1)
-        scale = min(self.width() * 0.34, self.height() * 0.62) / total_length
+        reference_total = max(2.4, self._seed.length1 + self._seed.length2)
+        scale = min(self.width() * 0.34, self.height() * 0.62) / reference_total
         pivot = QPointF(self.width() / 2.0, self.height() * 0.18)
         return pivot, self._seed.length1 * scale, self._seed.length2 * scale
 

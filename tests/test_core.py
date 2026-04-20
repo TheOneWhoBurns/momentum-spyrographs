@@ -46,6 +46,11 @@ def test_stability_map_returns_color_grid_and_axes() -> None:
     assert payload.omega2_values.shape == (9,)
 
 
+def test_projected_points_filter_non_finite_rows() -> None:
+    points = simulate_projected_points(PendulumSeed(omega1=8.5, omega2=-8.5, duration=24.0, dt=0.02))
+    assert np.isfinite(points).all()
+
+
 def test_preset_store_round_trip_archive_restore_and_migration(tmp_path) -> None:
     store = PresetStore(root=tmp_path)
     preset = create_preset_record(name="Orbit Study")

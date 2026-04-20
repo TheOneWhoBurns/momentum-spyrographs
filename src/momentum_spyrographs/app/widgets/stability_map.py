@@ -14,7 +14,7 @@ def _as_qpixmap(image: np.ndarray) -> QPixmap:
     return QPixmap.fromImage(qimage.copy())
 
 
-class StabilityMapWidget(QWidget):
+class StabilityMapCanvas(QWidget):
     seedSelected = Signal(float, float)
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -23,17 +23,7 @@ class StabilityMapWidget(QWidget):
         self._pixmap: QPixmap | None = None
         self._status = "Map pending"
         self._error = ""
-        self._caption = QLabel("Warm colors = faster periodic return. Dark regions = more chaotic.", self)
-        self._caption.setWordWrap(True)
-        self._caption.setStyleSheet("color: #d9e7ff;")
-        self._build_ui()
-
-    def _build_ui(self) -> None:
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(8)
-        layout.addWidget(self._caption)
-        self.setMinimumHeight(320)
+        self.setMinimumHeight(280)
 
     def set_payload(self, payload: StabilityMapPayload | None) -> None:
         self._payload = payload
@@ -63,12 +53,14 @@ class StabilityMapWidget(QWidget):
         self.seedSelected.emit(omega1, omega2)
 
     def paintEvent(self, event) -> None:  # type: ignore[override]
-        super().paintEvent(event)
+        del event
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         map_rect = self._map_rect()
+        painter.fillRect(self.rect(), QColor("#111827"))
         painter.fillRect(map_rect, QColor("#0c1120"))
+
         if self._pixmap is not None:
             painter.drawPixmap(map_rect.toRect(), self._pixmap)
         else:
@@ -94,20 +86,16 @@ class StabilityMapWidget(QWidget):
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.setPen(QPen(QColor("#ffffff"), 2))
             painter.drawEllipse(marker, 6.0, 6.0)
-            painter.setPen(QColor("#d7e4f8"))
-            painter.drawText(QRectF(0, self.height() - 22, self.width(), 20), Qt.AlignmentFlag.AlignCenter, "Arm 1 start speed  <->  Arm 2 start speed")
-            painter.drawText(QRectF(6, map_rect.top() - 2, 80, 20), Qt.AlignmentFlag.AlignLeft, "Arm 2")
-            painter.drawText(QRectF(self.width() - 84, map_rect.bottom() + 2, 80, 20), Qt.AlignmentFlag.AlignRight, "Arm 1")
 
         if self._status == "Building landscape":
             painter.setPen(QColor("#ff9d76"))
             painter.drawText(map_rect.adjusted(0, 0, -10, -10).toRect(), Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignRight, self._status)
 
     def _map_rect(self) -> QRectF:
-        top = self._caption.height() + 8.0
-        size = min(self.width() - 16.0, self.height() - top - 20.0)
+        size = min(self.width() - 18.0, self.height() - 18.0)
         size = max(120.0, size)
         left = (self.width() - size) / 2.0
+        top = (self.height() - size) / 2.0
         return QRectF(left, top, size, size)
 
     def _x_to_omega(self, x_value: float, rect: QRectF) -> float:
@@ -129,3 +117,38 @@ class StabilityMapWidget(QWidget):
         assert self._payload is not None
         ratio = (self._payload.omega2_values[-1] - omega_value) / max(self._payload.omega2_values[-1] - self._payload.omega2_values[0], 1e-9)
         return rect.top() + ratio * rect.height()
+
+
+class StabilityMapWidget(QWidget):
+    seedSelected = Signal(float, float)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._caption = QLabel("Warm colors = faster periodic return. Dark regions = more chaotic.", self)
+        self._caption.setWordWrap(True)
+        self._caption.setStyleSheet("color: #d9e7ff;")
+        self._axis_hint = QLabel("Arm 1 start speed  <->  Arm 2 start speed", self)
+        self._axis_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._axis_hint.setStyleSheet("color: #d7e4f8;")
+        self._canvas = StabilityMapCanvas(self)
+        self._canvas.seedSelected.connect(self.seedSelected.emit)
+        self._build_ui()
+
+    @property
+    def _payload(self) -> StabilityMapPayload | None:
+        return self._canvas._payload
+
+    def _build_ui(self) -> None:
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+        layout.addWidget(self._caption)
+        layout.addWidget(self._canvas, 1)
+        layout.addWidget(self._axis_hint)
+        self.setMinimumHeight(320)
+
+    def set_payload(self, payload: StabilityMapPayload | None) -> None:
+        self._canvas.set_payload(payload)
+
+    def set_status(self, status: str, error: str = "") -> None:
+        self._canvas.set_status(status, error=error)
