@@ -37,13 +37,35 @@ def test_main_window_recomputes_preview_after_setup_change(qtbot, tmp_path) -> N
     window.show()
 
     qtbot.waitUntil(lambda: window.state.preview_payload is not None, timeout=5000)
+    qtbot.waitUntil(lambda: window.map_panel._payload is not None, timeout=8000)
     window.setup_panel._energy_sliders[1].setValue(250)
+    window.setup_panel._length_sliders[1].setValue(175)
     qtbot.waitUntil(
         lambda: window.state.preview_payload is not None
         and abs(window.state.preview_payload.selected_seed.omega1 - 2.5) < 1e-9,
         timeout=5000,
     )
+    assert abs(window.state.seed.length1 - 1.75) < 1e-9
     window.preview_worker.shutdown()
+    window.map_worker.shutdown()
+    window.maybe_save_changes = lambda: True
+    window.close()
+
+
+def test_advanced_panel_expands_and_map_click_updates_seed(qtbot, tmp_path) -> None:
+    window = MainWindow(preset_root=tmp_path)
+    qtbot.addWidget(window)
+    window.show()
+
+    window.setup_panel._toggle.click()
+    assert window.setup_panel._content.isVisible()
+
+    qtbot.waitUntil(lambda: window.map_panel._payload is not None, timeout=8000)
+    map_rect = window.map_panel._map_rect()
+    window.map_panel.mousePressEvent(_FakeMouseEvent(map_rect.center()))
+    qtbot.waitUntil(lambda: abs(window.state.seed.omega1) < 0.4 and abs(window.state.seed.omega2) < 0.4, timeout=5000)
+    window.preview_worker.shutdown()
+    window.map_worker.shutdown()
     window.maybe_save_changes = lambda: True
     window.close()
 
@@ -69,5 +91,6 @@ def test_main_window_save_archive_restore_flow(qtbot, tmp_path, monkeypatch) -> 
     window.restore_current()
     assert len(window.store.list_presets()) == 1
     window.preview_worker.shutdown()
+    window.map_worker.shutdown()
     window.maybe_save_changes = lambda: True
     window.close()

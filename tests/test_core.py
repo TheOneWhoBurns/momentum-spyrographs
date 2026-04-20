@@ -7,6 +7,7 @@ from momentum_spyrographs.core.models import CreativeControls, PendulumSeed, Pre
 from momentum_spyrographs.core.presets import PresetStore
 from momentum_spyrographs.core.project import simulate_projected_points
 from momentum_spyrographs.core.render import write_gif, write_svg
+from momentum_spyrographs.core.stability_map import sample_stability_map
 
 
 def test_simulation_is_deterministic_and_has_expected_shape() -> None:
@@ -34,6 +35,15 @@ def test_metrics_are_bounded() -> None:
     assert 0.0 <= metrics.circularity_score <= 1.0
     assert 0.0 <= metrics.density_score <= 1.0
     assert 0.0 <= metrics.stability_score <= 1.0
+
+
+def test_stability_map_returns_color_grid_and_axes() -> None:
+    payload = sample_stability_map(PendulumSeed(duration=6.0, dt=0.03), grid_size=9)
+    assert payload.image.shape == (9, 9, 3)
+    assert payload.periodicity.shape == (9, 9)
+    assert payload.chaos.shape == (9, 9)
+    assert payload.omega1_values.shape == (9,)
+    assert payload.omega2_values.shape == (9,)
 
 
 def test_preset_store_round_trip_archive_restore_and_migration(tmp_path) -> None:

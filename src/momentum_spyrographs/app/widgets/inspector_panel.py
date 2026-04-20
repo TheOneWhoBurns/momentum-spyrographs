@@ -24,6 +24,11 @@ ARM_FIELDS = {
     2: "omega2",
 }
 
+LENGTH_FIELDS = {
+    1: "length1",
+    2: "length2",
+}
+
 
 class InspectorPanel(QWidget):
     seedChanged = Signal(str, object)
@@ -35,6 +40,8 @@ class InspectorPanel(QWidget):
         self._direction_boxes: dict[int, QComboBox] = {}
         self._energy_sliders: dict[int, QSlider] = {}
         self._energy_labels: dict[int, QLabel] = {}
+        self._length_sliders: dict[int, QSlider] = {}
+        self._length_labels: dict[int, QLabel] = {}
         self._space_combo = QComboBox(self)
         self.pendulum_canvas = PendulumCanvas(self)
         self._toggle = QToolButton(self)
@@ -65,8 +72,10 @@ class InspectorPanel(QWidget):
 
         content_layout = QVBoxLayout(self._content)
         content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(8)
 
         form_frame = QFrame(self._content)
+        form_frame.setObjectName("inspectorSection")
         form_layout = QFormLayout(form_frame)
         form_layout.addRow("Projection", self._space_combo)
         self._space_combo.addItems(["trace", "momentum", "omega", "angle"])
@@ -93,6 +102,7 @@ class InspectorPanel(QWidget):
             self._spin_boxes[key] = box
             form_layout.addRow(key.replace("theta", "theta ").replace("omega", "omega ").title(), box)
         content_layout.addWidget(form_frame)
+        content_layout.addStretch(1)
 
         self._content.setVisible(False)
         layout.addWidget(self._content)
@@ -123,8 +133,24 @@ class InspectorPanel(QWidget):
         energy_layout.addWidget(energy_slider, 1)
         energy_layout.addWidget(energy_label)
 
+        length_slider = QSlider(Qt.Orientation.Horizontal, group)
+        length_slider.setRange(20, 300)
+        length_slider.valueChanged.connect(lambda value, arm=arm_index: self._update_length_label(arm, value))
+        length_slider.valueChanged.connect(lambda _value, arm=arm_index: self._emit_arm_length(arm))
+        self._length_sliders[arm_index] = length_slider
+
+        length_label = QLabel("1.00", group)
+        self._length_labels[arm_index] = length_label
+
+        length_row = QWidget(group)
+        length_layout = QHBoxLayout(length_row)
+        length_layout.setContentsMargins(0, 0, 0, 0)
+        length_layout.addWidget(length_slider, 1)
+        length_layout.addWidget(length_label)
+
         form.addRow("Direction", direction)
         form.addRow("Energy", energy_row)
+        form.addRow("Length", length_row)
         return group
 
     def set_document(self, seed: PendulumSeed) -> None:
@@ -136,12 +162,15 @@ class InspectorPanel(QWidget):
                 box.setValue(float(getattr(seed, key)))
             self._set_arm_motion(1, seed.omega1)
             self._set_arm_motion(2, seed.omega2)
+            self._set_arm_length(1, seed.length1)
+            self._set_arm_length(2, seed.length2)
         finally:
             self._syncing = False
 
     def _set_expanded(self, expanded: bool) -> None:
         self._toggle.setArrowType(Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow)
         self._content.setVisible(expanded)
+        self.updateGeometry()
 
     def _set_arm_motion(self, arm_index: int, omega: float) -> None:
         direction = self._direction_boxes[arm_index]
@@ -149,6 +178,11 @@ class InspectorPanel(QWidget):
         slider.setValue(min(600, int(round(abs(omega) * 100))))
         direction.setCurrentIndex(0 if omega >= 0 else 1)
         self._update_energy_label(arm_index, slider.value())
+
+    def _set_arm_length(self, arm_index: int, length: float) -> None:
+        slider = self._length_sliders[arm_index]
+        slider.setValue(min(300, max(20, int(round(length * 100)))))
+        self._update_length_label(arm_index, slider.value())
 
     def _emit_pair(self, theta1: float, theta2: float) -> None:
         if self._syncing:
@@ -173,3 +207,11 @@ class InspectorPanel(QWidget):
 
     def _update_energy_label(self, arm_index: int, slider_value: int) -> None:
         self._energy_labels[arm_index].setText(f"{slider_value / 100.0:.2f}")
+
+    def _emit_arm_length(self, arm_index: int) -> None:
+        if self._syncing:
+            return
+        self.seedChanged.emit(LENGTH_FIELDS[arm_index], self._length_sliders[arm_index].value() / 100.0)
+
+    def _update_length_label(self, arm_index: int, slider_value: int) -> None:
+        self._length_labels[arm_index].setText(f"{slider_value / 100.0:.2f}")

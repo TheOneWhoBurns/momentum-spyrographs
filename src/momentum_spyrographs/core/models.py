@@ -174,6 +174,17 @@ class PreviewPayload:
 
 
 @dataclass(frozen=True)
+class StabilityMapPayload:
+    omega1_values: np.ndarray
+    omega2_values: np.ndarray
+    image: np.ndarray
+    periodicity: np.ndarray
+    chaos: np.ndarray
+    selected_omega1: float
+    selected_omega2: float
+
+
+@dataclass(frozen=True)
 class PresetRecord:
     id: str
     name: str

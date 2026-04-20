@@ -5,6 +5,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QCloseEvent
 from PySide6.QtWidgets import (
+    QHBoxLayout,
     QInputDialog,
     QLabel,
     QMainWindow,
@@ -15,12 +16,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from momentum_spyrographs.app.map_worker import MapWorker
 from momentum_spyrographs.app.preview_worker import PreviewWorker
 from momentum_spyrographs.app.state import AppState
 from momentum_spyrographs.app.widgets.export_dialog import ExportDialog
 from momentum_spyrographs.app.widgets.inspector_panel import InspectorPanel
 from momentum_spyrographs.app.widgets.preset_library import PresetLibrary
 from momentum_spyrographs.app.widgets.spirograph_preview import SpirographPreview
+from momentum_spyrographs.app.widgets.stability_map import StabilityMapWidget
 from momentum_spyrographs.app.widgets.style_studio import StyleStudio
 from momentum_spyrographs.core.models import ExportRequest
 from momentum_spyrographs.core.presets import PresetStore
@@ -37,11 +40,15 @@ class MainWindow(QMainWindow):
         self.store = PresetStore(root=preset_root)
         self.state = AppState()
         self.preview_worker = PreviewWorker(debounce_ms=80)
+        self.map_worker = MapWorker(debounce_ms=220)
         self._latest_preview_id = 0
         self._latest_preview_error = ""
+        self._latest_map_id = 0
+        self._latest_map_error = ""
 
         self.library = PresetLibrary(self)
         self.setup_panel = InspectorPanel(self)
+        self.map_panel = StabilityMapWidget(self)
         self.preview = SpirographPreview(self)
         self.style_studio = StyleStudio(self)
 
@@ -58,7 +65,12 @@ class MainWindow(QMainWindow):
         center_layout = QVBoxLayout(center)
         center_layout.setContentsMargins(0, 0, 0, 0)
         center_layout.setSpacing(12)
-        center_layout.addWidget(self._card("Pendulum Setup", self.setup_panel))
+
+        top_row = QHBoxLayout()
+        top_row.setSpacing(12)
+        top_row.addWidget(self._card("Pendulum Setup", self.setup_panel), 7)
+        top_row.addWidget(self._card("Start-State Map", self.map_panel), 5)
+        center_layout.addLayout(top_row)
         center_layout.addWidget(self._card("Preview", self.preview), 1)
 
         right = QWidget(self)
@@ -122,6 +134,7 @@ class MainWindow(QMainWindow):
     def _connect_signals(self) -> None:
         self.state.documentChanged.connect(self._sync_ui_from_state)
         self.state.previewRequested.connect(self.preview_worker.request_preview)
+        self.state.documentChanged.connect(self.map_worker.request_map)
         self.state.previewStatusChanged.connect(lambda status: self.preview.set_status(status, self._latest_preview_error))
         self.state.previewResultChanged.connect(self._sync_preview_payload)
         self.state.presetChanged.connect(lambda _: self._update_window_title())
@@ -130,6 +143,9 @@ class MainWindow(QMainWindow):
         self.preview_worker.previewStarted.connect(self._handle_preview_started)
         self.preview_worker.previewReady.connect(self._handle_preview_ready)
         self.preview_worker.previewFailed.connect(self._handle_preview_failed)
+        self.map_worker.mapStarted.connect(self._handle_map_started)
+        self.map_worker.mapReady.connect(self._handle_map_ready)
+        self.map_worker.mapFailed.connect(self._handle_map_failed)
 
         self.style_studio.renderChanged.connect(
             lambda key, value: self.state.update_render_settings(**{key: value})
@@ -138,6 +154,7 @@ class MainWindow(QMainWindow):
         self.setup_panel.seedChanged.connect(
             lambda key, value: self.state.update_seed(**{key: value})
         )
+        self.map_panel.seedSelected.connect(self._apply_map_seed)
 
         self.library.newRequested.connect(self.new_draft)
         self.library.saveRequested.connect(self.save_current)
@@ -182,6 +199,27 @@ class MainWindow(QMainWindow):
         self._latest_preview_error = message
         self.state.set_preview_status("error")
         self.statusBar().showMessage(f"Preview failed: {message}", 6000)
+
+    def _handle_map_started(self, request_id: int) -> None:
+        self._latest_map_id = request_id
+        self._latest_map_error = ""
+        self.map_panel.set_status("loading")
+
+    def _handle_map_ready(self, request_id: int, payload) -> None:
+        if request_id != self._latest_map_id:
+            return
+        self._latest_map_error = ""
+        self.map_panel.set_payload(payload)
+
+    def _handle_map_failed(self, request_id: int, message: str) -> None:
+        if request_id != self._latest_map_id:
+            return
+        self._latest_map_error = message
+        self.map_panel.set_status("error", error=message)
+        self.statusBar().showMessage(f"Map failed: {message}", 6000)
+
+    def _apply_map_seed(self, omega1: float, omega2: float) -> None:
+        self.state.update_seed(omega1=omega1, omega2=omega2)
 
     def refresh_library(self) -> None:
         presets = self.store.list_presets(
@@ -339,6 +377,7 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event: QCloseEvent) -> None:
         if self.maybe_save_changes():
             self.preview_worker.shutdown()
+            self.map_worker.shutdown()
             event.accept()
         else:
             event.ignore()
