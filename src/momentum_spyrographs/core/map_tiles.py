@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from math import ceil
 
+from momentum_spyrographs.core.analysis_config import CANONICAL_DT, CANONICAL_WINDOW_SECONDS
 from momentum_spyrographs.core.models import MapViewport, PendulumSeed
 
 
@@ -26,12 +27,7 @@ class TileSpec:
 
 def structural_seed_key(
     seed: PendulumSeed,
-    *,
-    map_duration: float | None = None,
-    map_dt: float | None = None,
 ) -> tuple[float, ...]:
-    duration = map_duration if map_duration is not None else min(seed.duration, 6.0)
-    dt = map_dt if map_dt is not None else max(seed.dt, 0.08)
     return (
         round(seed.theta1, 6),
         round(seed.theta2, 6),
@@ -40,8 +36,8 @@ def structural_seed_key(
         round(seed.mass1, 6),
         round(seed.mass2, 6),
         round(seed.gravity, 6),
-        round(duration, 6),
-        round(dt, 6),
+        round(CANONICAL_WINDOW_SECONDS, 6),
+        round(CANONICAL_DT, 6),
     )
 
 

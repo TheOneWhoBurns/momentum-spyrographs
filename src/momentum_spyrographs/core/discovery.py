@@ -1,11 +1,21 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import math
 
 import numpy as np
 
-from momentum_spyrographs.core.models import CreativeControls, PendulumSeed, SeedMetrics, SuggestionCandidate
-from momentum_spyrographs.core.project import simulate_projected_points
+from momentum_spyrographs.core.analysis_config import canonical_seed
+from momentum_spyrographs.core.coherence import CoherenceMetrics, coherence_rank, compute_coherence_metrics
+from momentum_spyrographs.core.models import (
+    CreativeControls,
+    PendulumSeed,
+    PeriodicityStatus,
+    SeedMetrics,
+    SuggestionCandidate,
+    TraceMetrics,
+)
+from momentum_spyrographs.core.project import simulate_projected_path
 
 
 def clamp01(value: float) -> float:
@@ -13,6 +23,8 @@ def clamp01(value: float) -> float:
 
 
 def normalize_points_for_metrics(points: np.ndarray) -> np.ndarray:
+    if len(points) == 0:
+        return points
     centered = points - points.mean(axis=0)
     span = float(np.max(np.ptp(centered, axis=0)))
     if span <= 1e-9:
@@ -30,10 +42,80 @@ def compute_seed_energy(seed: PendulumSeed) -> float:
     return kinetic + potential
 
 
-def compute_seed_metrics(seed: PendulumSeed, points: np.ndarray) -> SeedMetrics:
+def compute_trace_turns(points: np.ndarray) -> float:
+    if len(points) < 3:
+        return 0.0
+    centered = points - points.mean(axis=0)
+    angles = np.unwrap(np.arctan2(centered[:, 1], centered[:, 0]))
+    return float(np.sum(np.abs(np.diff(angles))) / (2.0 * math.pi))
+
+
+def build_orbit_signature(points: np.ndarray, metrics: SeedMetrics) -> np.ndarray:
     normalized = normalize_points_for_metrics(points)
     if len(normalized) < 4:
-        return SeedMetrics(energy=compute_seed_energy(seed))
+        return np.zeros(24 * 3 + 4, dtype=np.float64)
+
+    radii = np.linalg.norm(normalized, axis=1)
+    radial_hist, _ = np.histogram(radii, bins=24, range=(0.0, max(1.0, float(np.max(radii)) + 1e-6)))
+
+    angles = (np.arctan2(normalized[:, 1], normalized[:, 0]) + 2.0 * math.pi) % (2.0 * math.pi)
+    angular_hist, _ = np.histogram(angles, bins=24, range=(0.0, 2.0 * math.pi))
+
+    diffs = np.diff(normalized, axis=0)
+    headings = np.unwrap(np.arctan2(diffs[:, 1], diffs[:, 0]))
+    turns = np.diff(headings)
+    turn_hist, _ = np.histogram(turns, bins=24, range=(-math.pi, math.pi))
+
+    parts = []
+    for hist in (radial_hist, angular_hist, turn_hist):
+        hist = hist.astype(np.float64)
+        total = hist.sum() or 1.0
+        parts.append(hist / total)
+
+    parts.append(
+        np.array(
+            [
+                metrics.visual_symmetry_score,
+                metrics.circularity_score,
+                metrics.density_score,
+                clamp01(metrics.turns_total / 24.0),
+            ],
+            dtype=np.float64,
+        )
+    )
+    return np.concatenate(parts)
+
+
+def compare_orbit_signatures(a: np.ndarray, b: np.ndarray) -> float:
+    denom = float(np.linalg.norm(a) * np.linalg.norm(b))
+    if denom <= 1e-12:
+        return 0.0
+    return clamp01(float(np.dot(a, b) / denom))
+
+
+def compute_seed_metrics(
+    seed: PendulumSeed,
+    points: np.ndarray,
+    states: np.ndarray | None = None,
+    *,
+    divergence_score: float | None = None,
+) -> SeedMetrics:
+    normalized = normalize_points_for_metrics(points)
+    energy = compute_seed_energy(seed)
+
+    if divergence_score is None:
+        coherence = compute_coherence_metrics(seed)
+    else:
+        coherence = CoherenceMetrics(divergence_score=divergence_score, coherence_rank=coherence_rank(divergence_score))
+
+    if len(normalized) < 4:
+        return SeedMetrics(
+            energy=energy,
+            chaos_score=0.0,
+            trace_metrics=TraceMetrics(turns_total=compute_trace_turns(points)),
+            coherence_metrics=coherence,
+            periodicity_status=PeriodicityStatus.NOT_PROVEN,
+        )
 
     radii = np.linalg.norm(normalized, axis=1)
     spans = np.ptp(normalized, axis=0)
@@ -41,13 +123,10 @@ def compute_seed_metrics(seed: PendulumSeed, points: np.ndarray) -> SeedMetrics:
     radial_consistency = clamp01(math.exp(-float(np.std(radii)) * 7.0))
     circularity = clamp01(0.68 * radial_consistency + 0.32 * balance)
 
-    start_end_distance = float(np.linalg.norm(normalized[-1] - normalized[0]))
-    closure = clamp01(math.exp(-start_end_distance * 6.0))
-
     diffs = np.diff(normalized, axis=0)
     headings = np.unwrap(np.arctan2(diffs[:, 1], diffs[:, 0]))
-    turn = np.diff(headings)
-    chaos = clamp01(float(np.std(turn)) / 1.35)
+    turns = np.diff(headings)
+    chaos = clamp01(float(np.std(turns)) / 1.35) if len(turns) else 0.0
 
     bins = 18
     hist, _, _ = np.histogram2d(
@@ -64,37 +143,37 @@ def compute_seed_metrics(seed: PendulumSeed, points: np.ndarray) -> SeedMetrics:
     mirrored = np.fliplr(hist)
     rot_delta = float(np.abs(hist - rotated).sum() / total)
     mirror_delta = float(np.abs(hist - mirrored).sum() / total)
-    symmetry = clamp01(1.0 - min(rot_delta, mirror_delta))
-
-    stability = clamp01(
-        0.32 * circularity
-        + 0.26 * closure
-        + 0.18 * symmetry
-        + 0.12 * balance
-        + 0.12 * (1.0 - chaos)
-    )
+    angles = (np.arctan2(normalized[:, 1], normalized[:, 0]) + 2.0 * math.pi) % (2.0 * math.pi)
+    angular_hist, _ = np.histogram(angles, bins=24, range=(0.0, 2.0 * math.pi))
+    angular_mean = float(np.mean(angular_hist)) or 1.0
+    angular_balance = clamp01(math.exp(-float(np.std(angular_hist / angular_mean)) * 0.45))
+    mirror_symmetry = clamp01(1.0 - min(rot_delta, mirror_delta))
+    symmetry = clamp01(0.75 * angular_balance + 0.10 * mirror_symmetry + 0.15 * circularity)
 
     return SeedMetrics(
-        energy=compute_seed_energy(seed),
-        stability_score=stability,
-        circularity_score=circularity,
-        density_score=density,
+        energy=energy,
         chaos_score=chaos,
-        symmetry_score=symmetry,
-        closure_score=closure,
+        trace_metrics=TraceMetrics(
+            turns_total=compute_trace_turns(points),
+            visual_symmetry_score=symmetry,
+            circularity_score=circularity,
+            density_score=density,
+        ),
+        coherence_metrics=coherence,
+        periodicity_status=PeriodicityStatus.NOT_PROVEN,
     )
 
 
 def describe_metrics(metrics: SeedMetrics) -> str:
-    if metrics.stability_score > 0.78 and metrics.circularity_score > 0.74:
+    if metrics.coherence_rank > 0.82 and metrics.circularity_score > 0.74:
         return "Calm Orbit"
-    if metrics.density_score > 0.7 and metrics.symmetry_score > 0.55:
+    if metrics.density_score > 0.7 and metrics.visual_symmetry_score > 0.55 and metrics.coherence_rank > 0.45:
         return "Dense Mandala"
     if metrics.chaos_score > 0.6 and metrics.density_score > 0.5:
         return "Wild Rosette"
     if metrics.circularity_score > 0.62 and metrics.density_score < 0.45:
         return "Soft Pretzel"
-    if metrics.symmetry_score > 0.6 and metrics.density_score > 0.45:
+    if metrics.visual_symmetry_score > 0.6 and metrics.density_score > 0.45:
         return "Bright Floral"
     return "Unstable Lace" if metrics.chaos_score > 0.55 else "Ornate Orbit"
 
@@ -131,24 +210,24 @@ def _with_motion(
 
 def _generate_candidate_seeds(base_seed: PendulumSeed, controls: CreativeControls) -> list[PendulumSeed]:
     energy_pref = (controls.motion_y + 1.0) / 2.0
-    stability_pref = (1.0 - controls.motion_x) / 2.0
+    coherence_pref = (1.0 - controls.motion_x) / 2.0
     density_pref = (controls.shape_y + 1.0) / 2.0
     circular_pref = (1.0 - controls.shape_x) / 2.0
-    chaos_pref = 1.0 - stability_pref
+    chaos_pref = 1.0 - coherence_pref
     wild_pref = 1.0 - circular_pref
 
     omega_radius = 0.18 + 2.25 * energy_pref + 0.75 * chaos_pref
     angle_radius = 0.05 + 0.65 * wild_pref + 0.35 * density_pref + 0.25 * chaos_pref
     asymmetry = 0.08 + 0.95 * wild_pref + 0.35 * chaos_pref
-    softness = 0.10 + 0.70 * stability_pref
+    softness = 0.10 + 0.70 * coherence_pref
 
     family_seeds = [
         _with_motion(
             base_seed,
             theta1=(0.08 + 0.28 * circular_pref) * (0.9 + 0.1 * density_pref),
-            theta2=-(0.08 + 0.28 * circular_pref) * (0.82 + 0.18 * stability_pref),
+            theta2=-(0.08 + 0.28 * circular_pref) * (0.82 + 0.18 * coherence_pref),
             omega1=0.35 + omega_radius * (0.55 + 0.18 * circular_pref),
-            omega2=-(0.30 + omega_radius * (0.45 + 0.24 * stability_pref)),
+            omega2=-(0.30 + omega_radius * (0.45 + 0.24 * coherence_pref)),
         ),
         _with_motion(
             base_seed,
@@ -161,7 +240,7 @@ def _generate_candidate_seeds(base_seed: PendulumSeed, controls: CreativeControl
             base_seed,
             theta1=angle_radius * (0.75 + 0.22 * density_pref),
             theta2=angle_radius * (0.28 + 0.55 * asymmetry),
-            omega1=omega_radius * (0.45 + 0.18 * stability_pref),
+            omega1=omega_radius * (0.45 + 0.18 * coherence_pref),
             omega2=omega_radius * (0.92 + 0.28 * wild_pref),
         ),
         _with_motion(
@@ -171,43 +250,7 @@ def _generate_candidate_seeds(base_seed: PendulumSeed, controls: CreativeControl
             omega1=-(omega_radius * (0.50 + 0.25 * softness)),
             omega2=omega_radius * (0.48 + 0.42 * chaos_pref),
         ),
-        _with_motion(
-            base_seed,
-            theta1=0.03 + 0.18 * circular_pref,
-            theta2=-(0.03 + 0.18 * circular_pref) * (1.0 + 0.12 * chaos_pref),
-            omega1=0.12 + omega_radius * (0.26 + 0.15 * stability_pref),
-            omega2=0.12 + omega_radius * (0.24 + 0.12 * stability_pref),
-        ),
-        _with_motion(
-            base_seed,
-            theta1=angle_radius * (0.95 + 0.35 * density_pref),
-            theta2=-(angle_radius * (0.62 + 0.45 * asymmetry)),
-            omega1=omega_radius * (0.28 + 0.20 * stability_pref),
-            omega2=-(omega_radius * (0.92 + 0.35 * chaos_pref)),
-        ),
     ]
-
-    if base_seed.space == "trace":
-        curated_trace_bank = [
-            (-1.33, 1.11, 0.42, -1.80),
-            (1.38, -1.14, 0.60, -0.55),
-            (-1.01, 0.69, -2.76, 2.89),
-            (1.42, -0.17, 2.48, 1.37),
-            (-0.81, 1.34, 2.41, -2.82),
-            (1.24, -1.45, -2.13, 0.99),
-            (-0.90, -0.52, 2.92, 1.70),
-            (0.71, -0.43, 0.55, -2.16),
-        ]
-        for theta1, theta2, omega1, omega2 in curated_trace_bank:
-            family_seeds.append(
-                _with_motion(
-                    base_seed,
-                    theta1=theta1,
-                    theta2=theta2,
-                    omega1=omega1,
-                    omega2=omega2,
-                )
-            )
 
     candidates: dict[tuple[float, float, float, float, str], PendulumSeed] = {}
     candidates[_candidate_key(base_seed)] = base_seed
@@ -221,12 +264,6 @@ def _generate_candidate_seeds(base_seed: PendulumSeed, controls: CreativeControl
         (0.0, 1.0, 0.0, 1.0),
         (-1.0, 1.0, -1.0, 1.0),
         (1.0, -1.0, 1.0, -1.0),
-        (-1.0, -1.0, 1.0, -1.0),
-        (1.0, 1.0, -1.0, 1.0),
-        (-0.5, 0.5, 1.0, 0.0),
-        (0.5, -0.5, -1.0, 0.0),
-        (0.0, 0.0, -1.0, 1.0),
-        (0.0, 0.0, 1.0, -1.0),
     )
     for theta_dx, theta_dy, omega_dx, omega_dy in local_offsets:
         candidate = _with_motion(
@@ -249,35 +286,13 @@ def _generate_candidate_seeds(base_seed: PendulumSeed, controls: CreativeControl
             )
             candidates[_candidate_key(candidate)] = candidate
 
-        twist = 0.08 + 0.18 * wild_pref
-        swing = 0.16 + 0.32 * chaos_pref
-        variations = (
-            family_seed,
-            _with_motion(
-                base_seed,
-                theta1=family_seed.theta1 + twist,
-                theta2=family_seed.theta2 - twist * 0.8,
-                omega1=family_seed.omega1 + swing,
-                omega2=family_seed.omega2 - swing * 0.6,
-            ),
-            _with_motion(
-                base_seed,
-                theta1=-(family_seed.theta1 - twist * 0.5),
-                theta2=-(family_seed.theta2 + twist),
-                omega1=-(family_seed.omega1 * (0.75 + 0.2 * circular_pref)),
-                omega2=family_seed.omega2 * (0.72 + 0.3 * density_pref),
-            ),
-        )
-        for candidate in variations:
-            candidates[_candidate_key(candidate)] = candidate
-
     return list(candidates.values())
 
 
 def _score_target(metrics: SeedMetrics, controls: CreativeControls) -> float:
     circular_pref = (1.0 - controls.shape_x) / 2.0
     density_pref = (controls.shape_y + 1.0) / 2.0
-    stability_pref = (1.0 - controls.motion_x) / 2.0
+    coherence_pref = (1.0 - controls.motion_x) / 2.0
     chaos_pref = (controls.motion_x + 1.0) / 2.0
     energy_pref = (controls.motion_y + 1.0) / 2.0
     symmetry_pref = 0.35 + 0.55 * circular_pref
@@ -285,15 +300,18 @@ def _score_target(metrics: SeedMetrics, controls: CreativeControls) -> float:
     score = 0.0
     score += 2.8 * (1.0 - abs(metrics.circularity_score - circular_pref))
     score += 1.8 * (1.0 - abs(metrics.density_score - density_pref))
-    score += 2.3 * (1.0 - abs(metrics.stability_score - stability_pref))
+    score += 2.3 * (1.0 - abs(metrics.coherence_rank - coherence_pref))
     score += 1.2 * (1.0 - abs(metrics.chaos_score - chaos_pref))
     score += 1.0 * (1.0 - abs(metrics.energy_score - energy_pref))
-    score += 1.2 * (1.0 - abs(metrics.symmetry_score - symmetry_pref))
-    score += 1.0 * (1.0 - abs(metrics.closure_score - stability_pref))
+    score += 1.2 * (1.0 - abs(metrics.visual_symmetry_score - symmetry_pref))
     score += 0.8 * metrics.circularity_score * circular_pref
-    score += 0.6 * metrics.symmetry_score * circular_pref
-    score += 0.5 * metrics.stability_score * stability_pref
+    score += 0.6 * metrics.visual_symmetry_score * circular_pref
+    score += 0.5 * metrics.coherence_rank * coherence_pref
     return score
+
+
+def replace_seed_metrics(metrics: SeedMetrics, **kwargs: float) -> SeedMetrics:
+    return replace(metrics, **kwargs)
 
 
 def _normalize_energy_scores(metrics_by_seed: list[tuple[PendulumSeed, SeedMetrics, np.ndarray]]) -> None:
@@ -310,19 +328,15 @@ def _normalize_energy_scores(metrics_by_seed: list[tuple[PendulumSeed, SeedMetri
         )
 
 
-def replace_seed_metrics(metrics: SeedMetrics, **kwargs: float) -> SeedMetrics:
-    return SeedMetrics(**{**metrics.to_dict(), **kwargs})
-
-
 def build_suggestions(
     ranked: list[tuple[float, PendulumSeed, SeedMetrics, np.ndarray]],
     best_seed: PendulumSeed,
 ) -> tuple[SuggestionCandidate, ...]:
     suggestions: list[SuggestionCandidate] = []
     labels = [
-        ("Nearest Circular", lambda item: item[2].circularity_score + 0.5 * item[2].stability_score),
+        ("Nearest Circular", lambda item: item[2].circularity_score + 0.5 * item[2].coherence_rank),
         ("Nearest Dense", lambda item: item[2].density_score + 0.35 * item[2].symmetry_score),
-        ("Nearest Calm", lambda item: item[2].stability_score + (1.0 - item[2].energy_score)),
+        ("Nearest Calm", lambda item: item[2].coherence_rank + (1.0 - item[2].energy_score)),
         ("Nearest Ornate", lambda item: item[2].density_score + item[2].symmetry_score),
         ("Best Match", lambda item: item[0]),
     ]
@@ -343,24 +357,18 @@ def search_creative_candidates(
     base_seed: PendulumSeed,
     controls: CreativeControls,
 ) -> tuple[PendulumSeed, SeedMetrics, np.ndarray, tuple[SuggestionCandidate, ...]]:
-    preview_seed = base_seed.with_updates(
-        duration=min(base_seed.duration, 28.0),
-        dt=max(base_seed.dt, 0.02),
-    )
+    preview_seed = canonical_seed(base_seed)
     candidates = _generate_candidate_seeds(preview_seed, controls)
     metrics_by_seed: list[tuple[PendulumSeed, SeedMetrics, np.ndarray]] = []
     for candidate in candidates:
-        points = simulate_projected_points(candidate, max_points=900)
-        metrics = compute_seed_metrics(candidate, points)
+        points, states = simulate_projected_path(candidate, max_points=900)
+        metrics = compute_seed_metrics(candidate, points, states=states)
         metrics_by_seed.append((candidate, metrics, points))
 
     _normalize_energy_scores(metrics_by_seed)
 
     ranked = sorted(
-        (
-            (_score_target(metrics, controls), candidate, metrics, points)
-            for candidate, metrics, points in metrics_by_seed
-        ),
+        ((_score_target(metrics, controls), candidate, metrics, points) for candidate, metrics, points in metrics_by_seed),
         key=lambda item: item[0],
         reverse=True,
     )
@@ -372,6 +380,6 @@ def search_creative_candidates(
         omega2=best_preview_seed.omega2,
         space=best_preview_seed.space,
     )
-    best_points = simulate_projected_points(best_seed, max_points=1800)
+    best_points, _ = simulate_projected_path(canonical_seed(best_seed), max_points=1800)
     suggestions = build_suggestions(ranked, best_seed)
     return best_seed, best_metrics, best_points, suggestions

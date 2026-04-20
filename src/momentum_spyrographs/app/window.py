@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from momentum_spyrographs.app.loop_search_worker import LoopSearchWorker
 from momentum_spyrographs.app.map_worker import MapWorker
 from momentum_spyrographs.app.preview_worker import PreviewWorker
 from momentum_spyrographs.app.state import AppState
@@ -27,7 +28,8 @@ from momentum_spyrographs.app.widgets.preset_library import PresetLibrary
 from momentum_spyrographs.app.widgets.spirograph_preview import SpirographPreview
 from momentum_spyrographs.app.widgets.stability_map import StabilityMapWidget
 from momentum_spyrographs.app.widgets.style_studio import StyleStudio
-from momentum_spyrographs.core.models import ExportRequest
+from momentum_spyrographs.core.map_tiles import RESOLUTION_LEVELS
+from momentum_spyrographs.core.models import ExportRequest, RegionSearchRequest
 from momentum_spyrographs.core.presets import PresetStore
 from momentum_spyrographs.core.render import write_gif, write_svg
 
@@ -64,11 +66,14 @@ class MainWindow(QMainWindow):
         self.state = AppState()
         self.preview_worker = PreviewWorker(debounce_ms=80)
         self.map_worker = MapWorker(debounce_ms=220)
+        self.loop_search_worker = LoopSearchWorker()
         self._latest_preview_id = 0
         self._latest_preview_error = ""
         self._latest_map_id = 0
         self._latest_map_error = ""
+        self._latest_loop_search_id = 0
         self._panel_switching = False
+        self._last_search_bounds: tuple[float, float, float, float] | None = None
 
         self.library = PresetLibrary(self)
         self.setup_panel = InspectorPanel(self)
@@ -284,6 +289,9 @@ class MainWindow(QMainWindow):
         self.map_worker.mapStarted.connect(self._handle_map_started)
         self.map_worker.mapReady.connect(self._handle_map_ready)
         self.map_worker.mapFailed.connect(self._handle_map_failed)
+        self.loop_search_worker.searchStarted.connect(self._handle_loop_search_started)
+        self.loop_search_worker.searchReady.connect(self._handle_loop_search_ready)
+        self.loop_search_worker.searchFailed.connect(self._handle_loop_search_failed)
 
         self.style_studio.renderChanged.connect(
             lambda key, value: self.state.update_render_settings(**{key: value})
@@ -296,7 +304,9 @@ class MainWindow(QMainWindow):
             lambda key, value: self.state.update_seed(**{key: value})
         )
         self.map_panel.seedSelected.connect(self._apply_map_seed)
-        self.map_panel.viewportChanged.connect(self.state.update_map_viewport)
+        self.map_panel.viewportChanged.connect(self._handle_viewport_changed)
+        self.map_panel.boxSearchRequested.connect(self._search_box_for_matching_loop)
+        self.map_panel.matchLoopRequested.connect(self._search_last_region_or_viewport)
 
         self.library.newRequested.connect(self.new_draft)
         self.library.saveRequested.connect(self.save_current)
@@ -318,6 +328,8 @@ class MainWindow(QMainWindow):
         self.style_studio.set_render_settings(document.render_settings)
         self.preview.set_render_settings(document.render_settings)
         self.setup_panel.set_document(document.seed)
+        if self.map_panel.current_viewport() != self.state.map_viewport:
+            self.map_panel.clear_search_feedback()
         self.map_panel.set_viewport(self.state.map_viewport)
         self._update_window_title()
 
@@ -365,7 +377,7 @@ class MainWindow(QMainWindow):
             return
         self._latest_map_error = ""
         self.state.set_map_payload(payload)
-        if getattr(payload, "resolution_level", 0) >= 512:
+        if getattr(payload, "resolution_level", 0) >= RESOLUTION_LEVELS[-1]:
             self.state.set_map_status("idle")
 
     def _handle_map_failed(self, request_id: int, message: str) -> None:
@@ -378,6 +390,84 @@ class MainWindow(QMainWindow):
 
     def _apply_map_seed(self, omega1: float, omega2: float) -> None:
         self.state.update_map_selection(omega1=omega1, omega2=omega2)
+
+    def _handle_viewport_changed(self, viewport) -> None:
+        self.loop_search_worker.cancel_pending()
+        self.map_panel.clear_search_feedback()
+        self.state.update_map_viewport(viewport)
+
+    def _handle_loop_search_started(self, request_id: int) -> None:
+        self._latest_loop_search_id = request_id
+        self.map_panel.set_search_feedback("Finding stable minima…")
+
+    def _handle_loop_search_ready(self, request_id: int, result) -> None:
+        if request_id != self._latest_loop_search_id:
+            return
+        self.map_panel.set_search_feedback(result.status_text, result.markers)
+        self.statusBar().showMessage(result.status_text, 5000)
+
+    def _handle_loop_search_failed(self, request_id: int, message: str) -> None:
+        if request_id != self._latest_loop_search_id:
+            return
+        self.map_panel.set_search_feedback("Stable-minima search failed")
+        self.statusBar().showMessage(f"Stable-minima search failed: {message}", 6000)
+
+    def _search_box_for_matching_loop(self, omega1_a: float, omega1_b: float, omega2_a: float, omega2_b: float) -> None:
+        self._last_search_bounds = (omega1_a, omega1_b, omega2_a, omega2_b)
+        self._start_loop_search(
+            mode="box",
+            omega1_a=omega1_a,
+            omega1_b=omega1_b,
+            omega2_a=omega2_a,
+            omega2_b=omega2_b,
+        )
+
+    def _search_last_region_or_viewport(self) -> None:
+        if self._last_search_bounds is not None:
+            omega1_a, omega1_b, omega2_a, omega2_b = self._last_search_bounds
+            self._start_loop_search(
+                mode="box",
+                omega1_a=omega1_a,
+                omega1_b=omega1_b,
+                omega2_a=omega2_a,
+                omega2_b=omega2_b,
+            )
+            return
+        viewport = self.state.map_viewport
+        self._start_loop_search(
+            mode="viewport",
+            omega1_a=viewport.omega1_min,
+            omega1_b=viewport.omega1_max,
+            omega2_a=viewport.omega2_min,
+            omega2_b=viewport.omega2_max,
+        )
+
+    def _start_loop_search(
+        self,
+        *,
+        mode: str,
+        omega1_a: float,
+        omega1_b: float,
+        omega2_a: float,
+        omega2_b: float,
+    ) -> None:
+        preview_payload = self.state.preview_payload
+        map_payload = self.state.map_payload
+        if preview_payload is None or map_payload is None or len(preview_payload.points) < 8:
+            self.map_panel.set_search_feedback("Preview reference unavailable")
+            return
+        request = RegionSearchRequest(
+            mode=mode,
+            payload=map_payload,
+            reference_seed=self.state.seed,
+            reference_points=preview_payload.points,
+            reference_metrics=preview_payload.metrics,
+            omega1_min=min(omega1_a, omega1_b),
+            omega1_max=max(omega1_a, omega1_b),
+            omega2_min=min(omega2_a, omega2_b),
+            omega2_max=max(omega2_a, omega2_b),
+        )
+        self.loop_search_worker.request_search(request)
 
     # ------------------------------------------------------------------
     # Preset operations
@@ -427,14 +517,22 @@ class MainWindow(QMainWindow):
         self.refresh_library()
 
     def save_current(self, save_as: bool = False) -> bool:
+        if self.state.current_preset is not None and not save_as and not self.state.is_dirty:
+            self.statusBar().showMessage("No changes to save.", 3000)
+            return True
+
         existing_name = self.state.display_name
         if save_as or self.state.current_preset is None:
             name, ok = QInputDialog.getText(self, "Save Creation", "Creation name:", text=existing_name)
             if not ok or not name.strip():
                 return False
-            preset = self.state.create_snapshot(name=name.strip(), duplicate=save_as or self.state.current_preset is None)
+            preset = self.state.create_snapshot(
+                name=name.strip(),
+                duplicate=save_as or self.state.current_preset is None,
+            )
         else:
-            preset = self.state.create_snapshot(name=existing_name)
+            version_name = self.store.next_version_name(existing_name)
+            preset = self.state.create_snapshot(name=version_name, duplicate=True)
 
         stored = self.store.save_preset(preset)
         self.state.mark_saved(stored)
@@ -448,8 +546,11 @@ class MainWindow(QMainWindow):
             return
         name, ok = QInputDialog.getText(self, "Rename Creation", "New name:", text=self.state.display_name)
         if ok and name.strip():
-            self.state.rename_draft(name.strip())
-            self.save_current()
+            preset = self.state.create_snapshot(name=name.strip())
+            stored = self.store.save_preset(preset)
+            self.state.mark_saved(stored)
+            self.refresh_library()
+            self.statusBar().showMessage(f"Renamed to {stored.name}", 4000)
 
     def duplicate_current(self) -> None:
         default_name = f"{self.state.display_name} Copy"
@@ -548,6 +649,7 @@ class MainWindow(QMainWindow):
         if self.maybe_save_changes():
             self.preview_worker.shutdown()
             self.map_worker.shutdown()
+            self.loop_search_worker.shutdown()
             event.accept()
         else:
             event.ignore()

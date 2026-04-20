@@ -6,7 +6,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from PySide6.QtCore import QObject, QTimer, Signal
 
 from momentum_spyrographs.core.map_tiles import RESOLUTION_LEVELS
-from momentum_spyrographs.core.models import MapRequest, StabilityMapPayload
+from momentum_spyrographs.core.models import ExplorationMapPayload, MapRequest
 from momentum_spyrographs.core.stability_map import render_map_level
 
 
@@ -25,9 +25,9 @@ class MapWorker(QObject):
         self._latest_request: MapRequest | None = None
         self._latest_request_id = 0
         self._cache_limit = cache_limit
-        self._level_cache: OrderedDict[tuple, StabilityMapPayload] = OrderedDict()
+        self._level_cache: OrderedDict[tuple, ExplorationMapPayload] = OrderedDict()
         self._final_cache_key: tuple | None = None
-        self._final_payload: StabilityMapPayload | None = None
+        self._final_payload: ExplorationMapPayload | None = None
         self._requested_serial = 0
 
     def request_map(self, request: MapRequest) -> None:
@@ -55,7 +55,7 @@ class MapWorker(QObject):
         future = self._executor.submit(self._compute_progressive, request)
         future.add_done_callback(lambda done, rid=request_id: self._handle_result(rid, done))
 
-    def _handle_result(self, request_id: int, future: Future[list[StabilityMapPayload]]) -> None:
+    def _handle_result(self, request_id: int, future: Future[list[ExplorationMapPayload]]) -> None:
         if request_id != self._requested_serial:
             return
         try:
@@ -66,8 +66,8 @@ class MapWorker(QObject):
         for payload in payloads:
             self.mapReady.emit(request_id, payload)
 
-    def _compute_progressive(self, request: MapRequest) -> list[StabilityMapPayload]:
-        payloads: list[StabilityMapPayload] = []
+    def _compute_progressive(self, request: MapRequest) -> list[ExplorationMapPayload]:
+        payloads: list[ExplorationMapPayload] = []
         for level in RESOLUTION_LEVELS:
             cache_key = self._request_cache_key(request, level)
             cached = self._level_cache.get(cache_key)
@@ -98,12 +98,10 @@ class MapWorker(QObject):
         )
 
     @staticmethod
-    def _with_selection(payload: StabilityMapPayload, request: MapRequest) -> StabilityMapPayload:
-        return StabilityMapPayload(
+    def _with_selection(payload: ExplorationMapPayload, request: MapRequest) -> ExplorationMapPayload:
+        return ExplorationMapPayload(
             image=payload.image,
-            periodicity=payload.periodicity,
-            chaos=payload.chaos,
-            loop_score=payload.loop_score,
+            divergence_grid=payload.divergence_grid,
             overlay_seed=request.seed,
             selected_omega1=request.selected_omega1,
             selected_omega2=request.selected_omega2,
@@ -112,7 +110,9 @@ class MapWorker(QObject):
             viewport_omega2_min=payload.viewport_omega2_min,
             viewport_omega2_max=payload.viewport_omega2_max,
             resolution_level=payload.resolution_level,
+            exact_resolution_level=payload.exact_resolution_level,
             tile_size=payload.tile_size,
             pending_tiles=payload.pending_tiles,
             completed_tiles=payload.completed_tiles,
+            minima_markers=payload.minima_markers,
         )

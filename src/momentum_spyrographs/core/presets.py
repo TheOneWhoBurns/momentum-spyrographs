@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from platformdirs import user_data_dir
@@ -8,6 +9,9 @@ from platformdirs import user_data_dir
 from momentum_spyrographs.core.models import PresetRecord, utc_now_iso
 from momentum_spyrographs.core.project import simulate_projected_points
 from momentum_spyrographs.core.render import background_color, render_thumbnail
+
+
+_VERSION_SUFFIX_RE = re.compile(r"^(?P<base>.*?)(?: v(?P<version>\d+))?$")
 
 
 class PresetStore:
@@ -35,6 +39,19 @@ class PresetStore:
                 continue
             records.append(record)
         return sorted(records, key=lambda item: item.updated_at, reverse=True)
+
+    def next_version_name(self, current_name: str) -> str:
+        match = _VERSION_SUFFIX_RE.match(current_name.strip())
+        base_name = (match.group("base") if match is not None else current_name).strip() or current_name.strip()
+        highest_version = 0
+        for preset in self.list_presets(include_archived=True):
+            preset_match = _VERSION_SUFFIX_RE.match(preset.name.strip())
+            if preset_match is None or preset_match.group("base").strip() != base_name:
+                continue
+            version = preset_match.group("version")
+            highest_version = max(highest_version, int(version) if version is not None else 1)
+        next_version = max(2, highest_version + 1)
+        return f"{base_name} v{next_version}"
 
     def load_preset(self, preset_id: str) -> PresetRecord:
         return PresetRecord.from_dict(

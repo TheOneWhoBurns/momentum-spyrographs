@@ -11,8 +11,7 @@ from momentum_spyrographs.core.map_tiles import (
     viewport_from_bounds,
     zoom_viewport,
 )
-from momentum_spyrographs.core.models import MapViewport, PendulumSeed, StabilityMapPayload
-from momentum_spyrographs.core.stability_map import find_region_loop_candidates
+from momentum_spyrographs.core.models import ExplorationMapPayload, MapViewport, PendulumSeed, RegionSearchMarker
 
 
 def _as_qpixmap(image: np.ndarray) -> QPixmap:
@@ -24,6 +23,7 @@ def _as_qpixmap(image: np.ndarray) -> QPixmap:
 class StabilityMapCanvas(QWidget):
     seedSelected = Signal(float, float)
     viewportChanged = Signal(object)
+    boxSearchRequested = Signal(float, float, float, float)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -32,14 +32,15 @@ class StabilityMapCanvas(QWidget):
         self._status = "Map pending"
         self._error = ""
         self._viewport = default_viewport(PendulumSeed())
-        self._drag_start: QPointF | None = None
-        self._pan_origin: MapViewport | None = None
+        self._press_position: QPointF | None = None
         self._selection_rect: QRectF | None = None
         self._interaction_mode: str | None = None
+        self._pan_origin: MapViewport | None = None
+        self._markers: tuple[RegionSearchMarker, ...] = tuple()
         self.setMinimumHeight(160)
         self.setMouseTracking(True)
 
-    def set_payload(self, payload: StabilityMapPayload | None) -> None:
+    def set_payload(self, payload: ExplorationMapPayload | None) -> None:
         self._payload = payload
         if payload is not None:
             self._pixmap = _as_qpixmap(payload.image)
@@ -74,51 +75,70 @@ class StabilityMapCanvas(QWidget):
     def current_viewport(self) -> MapViewport:
         return self._viewport
 
+    def set_markers(self, markers: tuple[RegionSearchMarker, ...]) -> None:
+        self._markers = markers
+        self.update()
+
+    def clear_markers(self) -> None:
+        if not self._markers:
+            return
+        self._markers = tuple()
+        self.update()
+
     def mousePressEvent(self, event) -> None:  # type: ignore[override]
         map_rect = self._map_rect()
         if not map_rect.contains(event.position()):
             return
+        self._press_position = event.position()
+        self._selection_rect = None
         if event.button() == Qt.MouseButton.LeftButton:
-            self._drag_start = event.position()
-            self._selection_rect = QRectF(event.position(), event.position())
-            self._interaction_mode = "select"
-            self.update()
-        elif event.button() == Qt.MouseButton.RightButton:
-            self._drag_start = event.position()
+            self._interaction_mode = "left_pending"
             self._pan_origin = self._viewport
-            self._interaction_mode = "pan"
+        elif event.button() == Qt.MouseButton.RightButton:
+            self._interaction_mode = "box"
+            self._selection_rect = QRectF(event.position(), event.position())
+            self.update()
 
     def mouseMoveEvent(self, event) -> None:  # type: ignore[override]
-        if self._drag_start is None or self._interaction_mode is None:
+        if self._press_position is None or self._interaction_mode is None:
             return
         map_rect = self._map_rect()
-        if self._interaction_mode == "pan" and self._pan_origin is not None:
-            delta = event.position() - self._drag_start
-            if abs(delta.x()) + abs(delta.y()) < 5.0:
+        if self._interaction_mode in {"left_pending", "pan"} and self._pan_origin is not None:
+            delta = event.position() - self._press_position
+            if self._interaction_mode == "left_pending" and (abs(delta.x()) + abs(delta.y())) > 6.0:
+                self._interaction_mode = "pan"
+            if self._interaction_mode == "pan":
+                delta_omega1 = -(delta.x() / max(map_rect.width(), 1.0)) * self._pan_origin.span_omega1
+                delta_omega2 = (delta.y() / max(map_rect.height(), 1.0)) * self._pan_origin.span_omega2
+                viewport = pan_viewport(
+                    self._pan_origin,
+                    delta_omega1=delta_omega1,
+                    delta_omega2=delta_omega2,
+                )
+                self._viewport = viewport
+                self.viewportChanged.emit(viewport)
                 return
-            delta_omega1 = -(delta.x() / max(map_rect.width(), 1.0)) * self._pan_origin.span_omega1
-            delta_omega2 = (delta.y() / max(map_rect.height(), 1.0)) * self._pan_origin.span_omega2
-            viewport = pan_viewport(
-                self._pan_origin,
-                delta_omega1=delta_omega1,
-                delta_omega2=delta_omega2,
-            )
-            self._viewport = viewport
-            self.viewportChanged.emit(viewport)
-            return
-        if self._interaction_mode == "select":
+        if self._interaction_mode == "box":
             bounded_end = QPointF(
                 min(max(event.position().x(), map_rect.left()), map_rect.right()),
                 min(max(event.position().y(), map_rect.top()), map_rect.bottom()),
             )
-            self._selection_rect = QRectF(self._drag_start, bounded_end).normalized()
+            self._selection_rect = QRectF(self._press_position, bounded_end).normalized()
             self.update()
 
     def mouseReleaseEvent(self, event) -> None:  # type: ignore[override]
-        if self._drag_start is None or self._interaction_mode is None:
+        if self._press_position is None or self._interaction_mode is None:
             return
         map_rect = self._map_rect()
-        if self._interaction_mode == "select" and self._payload is not None:
+        if self._interaction_mode == "left_pending":
+            marker = self._marker_at(event.position(), map_rect)
+            if marker is not None:
+                self.seedSelected.emit(marker.seed.omega1, marker.seed.omega2)
+            else:
+                omega1 = self._x_to_omega(event.position().x(), map_rect)
+                omega2 = self._y_to_omega(event.position().y(), map_rect)
+                self.seedSelected.emit(omega1, omega2)
+        elif self._interaction_mode == "box":
             selection_rect = self._selection_rect.normalized() if self._selection_rect is not None else QRectF()
             if selection_rect.width() >= 10.0 and selection_rect.height() >= 10.0:
                 omega1_a = self._x_to_omega(selection_rect.left(), map_rect)
@@ -134,15 +154,12 @@ class StabilityMapCanvas(QWidget):
                 )
                 self._viewport = viewport
                 self.viewportChanged.emit(viewport)
-                self.seedSelected.emit(viewport.center_omega1, viewport.center_omega2)
-            else:
-                omega1 = self._x_to_omega(event.position().x(), map_rect)
-                omega2 = self._y_to_omega(event.position().y(), map_rect)
-                self.seedSelected.emit(omega1, omega2)
-        self._drag_start = None
-        self._pan_origin = None
+                self.boxSearchRequested.emit(omega1_a, omega1_b, omega2_a, omega2_b)
+        del event
+        self._press_position = None
         self._selection_rect = None
         self._interaction_mode = None
+        self._pan_origin = None
         self.update()
 
     def wheelEvent(self, event) -> None:  # type: ignore[override]
@@ -187,6 +204,8 @@ class StabilityMapCanvas(QWidget):
             painter.drawLine(QPointF(x_value, map_rect.top()), QPointF(x_value, map_rect.bottom()))
             painter.drawLine(QPointF(map_rect.left(), y_value), QPointF(map_rect.right(), y_value))
 
+        self._paint_markers(painter, map_rect)
+
         if self._selection_rect is not None and self._selection_rect.width() > 2.0 and self._selection_rect.height() > 2.0:
             painter.setBrush(QColor(115, 210, 222, 38))
             painter.setPen(QPen(QColor("#73d2de"), 2))
@@ -197,11 +216,20 @@ class StabilityMapCanvas(QWidget):
                 self._omega_to_x(self._payload.selected_omega1, map_rect),
                 self._omega_to_y(self._payload.selected_omega2, map_rect),
             )
-            self._paint_pendulum_overlay(painter, map_rect, marker, self._payload.overlay_seed)
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.setPen(QPen(QColor("#ffffff"), 2))
-            painter.drawEllipse(marker, 6.0, 6.0)
-            status = f"Detail {self._payload.resolution_level}   Tiles {self._payload.completed_tiles}"
+            cross_pen = QPen(QColor(255, 255, 255, 60), 1)
+            painter.setPen(cross_pen)
+            painter.drawLine(QPointF(marker.x() - 10.0, marker.y()), QPointF(marker.x() + 10.0, marker.y()))
+            painter.drawLine(QPointF(marker.x(), marker.y() - 10.0), QPointF(marker.x(), marker.y() + 10.0))
+            painter.setBrush(QColor("#ffffff"))
+            painter.setPen(QPen(QColor("#ffffff"), 1.6))
+            painter.drawEllipse(marker, 5.5, 5.5)
+            painter.setBrush(QColor("#ffffff"))
+            painter.drawEllipse(marker, 1.8, 1.8)
+            status = (
+                f"View {self._payload.resolution_level}"
+                f"   Exact {self._payload.exact_resolution_level}"
+                f"   Tiles {self._payload.completed_tiles}"
+            )
             if self._status == "Rendering landscape":
                 status = f"{self._status}   {status}"
             painter.setPen(QColor("#ff9d76"))
@@ -209,6 +237,13 @@ class StabilityMapCanvas(QWidget):
                 map_rect.adjusted(10, 10, -10, -10).toRect(),
                 Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignRight,
                 status,
+            )
+            painter.setPen(QColor("#d7e4f8"))
+            legend = "Black = low finite-time divergence   Color = higher finite-time divergence"
+            painter.drawText(
+                map_rect.adjusted(10, 10, -10, -10).toRect(),
+                Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignLeft,
+                legend,
             )
 
     def _map_rect(self) -> QRectF:
@@ -230,90 +265,57 @@ class StabilityMapCanvas(QWidget):
         ratio = (self._viewport.omega2_max - omega_value) / max(self._viewport.span_omega2, 1e-9)
         return rect.top() + ratio * rect.height()
 
-    def _paint_pendulum_overlay(
-        self,
-        painter: QPainter,
-        map_rect: QRectF,
-        marker: QPointF,
-        seed: PendulumSeed,
-    ) -> None:
-        max_span = max(seed.length1 + seed.length2, 1e-6)
-        overlay_radius = min(map_rect.width(), map_rect.height()) * 0.08
-        scale = overlay_radius / max_span
+    def _marker_at(self, position: QPointF, rect: QRectF) -> RegionSearchMarker | None:
+        closest: RegionSearchMarker | None = None
+        closest_distance = 1.0e9
+        for marker in self._markers:
+            point = QPointF(
+                self._omega_to_x(marker.seed.omega1, rect),
+                self._omega_to_y(marker.seed.omega2, rect),
+            )
+            distance = np.hypot(position.x() - point.x(), position.y() - point.y())
+            if distance <= 10.0 and distance < closest_distance:
+                closest = marker
+                closest_distance = distance
+        return closest
 
-        bob1_local = QPointF(
-            seed.length1 * scale * np.sin(seed.theta1),
-            seed.length1 * scale * np.cos(seed.theta1),
-        )
-        bob2_local = QPointF(
-            bob1_local.x() + seed.length2 * scale * np.sin(seed.theta2),
-            bob1_local.y() + seed.length2 * scale * np.cos(seed.theta2),
-        )
-        pivot = QPointF(marker.x() - bob2_local.x(), marker.y() - bob2_local.y())
-        bob1 = QPointF(pivot.x() + bob1_local.x(), pivot.y() + bob1_local.y())
-        bob2 = QPointF(pivot.x() + bob2_local.x(), pivot.y() + bob2_local.y())
-
-        left = min(pivot.x(), bob1.x(), bob2.x())
-        right = max(pivot.x(), bob1.x(), bob2.x())
-        top = min(pivot.y(), bob1.y(), bob2.y())
-        bottom = max(pivot.y(), bob1.y(), bob2.y())
-        margin = 10.0
-        shift_x = 0.0
-        shift_y = 0.0
-        if left < map_rect.left() + margin:
-            shift_x = map_rect.left() + margin - left
-        elif right > map_rect.right() - margin:
-            shift_x = map_rect.right() - margin - right
-        if top < map_rect.top() + margin:
-            shift_y = map_rect.top() + margin - top
-        elif bottom > map_rect.bottom() - margin:
-            shift_y = map_rect.bottom() - margin - bottom
-        if shift_x or shift_y:
-            offset = QPointF(shift_x, shift_y)
-            pivot = pivot + offset
-            bob1 = bob1 + offset
-            bob2 = bob2 + offset
-
-        halo_pen = QPen(QColor(9, 14, 24, 180), 12)
-        halo_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-        painter.setPen(halo_pen)
-        painter.drawLine(pivot, bob1)
-        painter.drawLine(bob1, bob2)
-
-        rod_pen = QPen(QColor("#d7e4f8"), 3)
-        rod_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-        painter.setPen(rod_pen)
-        painter.drawLine(pivot, bob1)
-        painter.drawLine(bob1, bob2)
-
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor("#ff9d76"))
-        painter.drawEllipse(pivot, 6.0, 6.0)
-        painter.setBrush(QColor("#73d2de"))
-        painter.drawEllipse(bob1, 10.0, 10.0)
-        painter.setBrush(QColor("#ffb36b"))
-        painter.drawEllipse(bob2, 10.0, 10.0)
+    def _paint_markers(self, painter: QPainter, rect: QRectF) -> None:
+        for index, marker in enumerate(self._markers):
+            point = QPointF(
+                self._omega_to_x(marker.seed.omega1, rect),
+                self._omega_to_y(marker.seed.omega2, rect),
+            )
+            radius = 5.0 if index > 0 else 6.0
+            fill = QColor(255, 255, 255, 210 if index == 0 else 150)
+            if index > 0:
+                fill = QColor(115, 210, 222, 150)
+            painter.setBrush(fill)
+            painter.setPen(QPen(QColor(215, 228, 248, 220), 1.2))
+            painter.drawEllipse(point, radius, radius)
+            painter.setBrush(QColor("#0a0f1c"))
+            painter.drawEllipse(point, 1.8, 1.8)
 
 
 class StabilityMapWidget(QWidget):
     seedSelected = Signal(float, float)
     viewportChanged = Signal(object)
+    boxSearchRequested = Signal(float, float, float, float)
+    matchLoopRequested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._canvas = StabilityMapCanvas(self)
         self._canvas.seedSelected.connect(self.seedSelected.emit)
         self._canvas.viewportChanged.connect(self.viewportChanged.emit)
-        self._loop_candidates: list[tuple[float, float, float]] = []
-        self._loop_candidate_index = 0
-        self._candidate_signature: tuple[float, float, int] | None = None
+        self._canvas.boxSearchRequested.connect(self.boxSearchRequested.emit)
         self._canvas.setToolTip(
-            "Click to set start speeds\nLeft-drag to zoom into a region\nRight-drag to pan \u00b7 Scroll to zoom"
+            "Left-click to pick a point or marker\nLeft-drag to pan\nRight-drag to zoom into a box and show stable minima\nScroll to zoom"
         )
         self._reset_button = QPushButton("\u27f2 Reset", self)
         self._zoom_out_button = QPushButton("\u2212", self)
         self._zoom_in_button = QPushButton("+", self)
-        self._find_loop_button = QPushButton("\u2609 Find Nearby Loop", self)
+        self._find_loop_button = QPushButton("\u2609 Find Stable Match", self)
+        self._find_loop_button.setToolTip("Find low-divergence minima in the selected box or visible screen that best match the current trace")
         self._hint = QLabel("", self)
         self.undo_button = QPushButton("\u21a9 Undo", self)
         self.redo_button = QPushButton("\u21aa Redo", self)
@@ -321,18 +323,25 @@ class StabilityMapWidget(QWidget):
         self._reset_button.clicked.connect(self._reset_view)
         self._zoom_in_button.clicked.connect(lambda: self._zoom(1.22))
         self._zoom_out_button.clicked.connect(lambda: self._zoom(1.0 / 1.22))
-        self._find_loop_button.clicked.connect(self._select_nearby_loop)
+        self._find_loop_button.clicked.connect(self.matchLoopRequested.emit)
 
     @property
-    def _payload(self) -> StabilityMapPayload | None:
+    def _payload(self) -> ExplorationMapPayload | None:
         return self._canvas._payload
 
     def _build_ui(self) -> None:
-        for btn in (self._reset_button, self._zoom_out_button, self._zoom_in_button, self._find_loop_button, self.undo_button, self.redo_button):
+        for btn in (
+            self._reset_button,
+            self._zoom_out_button,
+            self._zoom_in_button,
+            self._find_loop_button,
+            self.undo_button,
+            self.redo_button,
+        ):
             btn.setObjectName("secondaryBtn")
-            btn.setFixedHeight(24)
-        self._zoom_out_button.setFixedWidth(32)
-        self._zoom_in_button.setFixedWidth(32)
+            btn.setMinimumHeight(36)
+        self._zoom_out_button.setFixedWidth(44)
+        self._zoom_in_button.setFixedWidth(44)
         self._zoom_out_button.setAutoRepeat(True)
         self._zoom_in_button.setAutoRepeat(True)
         self._zoom_out_button.setAutoRepeatDelay(140)
@@ -344,10 +353,12 @@ class StabilityMapWidget(QWidget):
         self.redo_button.setToolTip("Redo map click (Ctrl+Shift+Z)")
         self.redo_button.setEnabled(False)
         self._hint.setStyleSheet("color: #d7e4f8;")
+        self._hint.setMinimumHeight(36)
+        self._hint.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight)
 
         toolbar = QHBoxLayout()
         toolbar.setContentsMargins(0, 0, 0, 0)
-        toolbar.setSpacing(4)
+        toolbar.setSpacing(8)
         toolbar.addWidget(self._reset_button)
         toolbar.addWidget(self._zoom_out_button)
         toolbar.addWidget(self._zoom_in_button)
@@ -364,11 +375,8 @@ class StabilityMapWidget(QWidget):
         layout.addWidget(self._canvas, 1)
         self.setMinimumHeight(200)
 
-    def set_payload(self, payload: StabilityMapPayload | None) -> None:
+    def set_payload(self, payload: ExplorationMapPayload | None) -> None:
         self._canvas.set_payload(payload)
-        self._loop_candidates = []
-        self._loop_candidate_index = 0
-        self._candidate_signature = None
         if payload is None:
             self._hint.setText("")
 
@@ -381,6 +389,14 @@ class StabilityMapWidget(QWidget):
     def current_viewport(self) -> MapViewport:
         return self._canvas.current_viewport()
 
+    def set_search_feedback(self, text: str, markers: tuple[RegionSearchMarker, ...] = tuple()) -> None:
+        self._hint.setText(text)
+        self._canvas.set_markers(markers)
+
+    def clear_search_feedback(self) -> None:
+        self._hint.setText("")
+        self._canvas.clear_markers()
+
     def _reset_view(self) -> None:
         seed = self._payload.overlay_seed if self._payload is not None else PendulumSeed()
         self.viewportChanged.emit(default_viewport(seed))
@@ -388,32 +404,3 @@ class StabilityMapWidget(QWidget):
     def _zoom(self, factor: float) -> None:
         viewport = zoom_viewport(self.current_viewport(), zoom_factor=factor)
         self.viewportChanged.emit(viewport)
-
-    def _select_nearby_loop(self) -> None:
-        payload = self._payload
-        if payload is None:
-            return
-        signature = (
-            round(payload.selected_omega1, 5),
-            round(payload.selected_omega2, 5),
-            payload.resolution_level,
-        )
-        if signature != self._candidate_signature or not self._loop_candidates:
-            self._loop_candidates = find_region_loop_candidates(
-                payload,
-                center_omega1=payload.selected_omega1,
-                center_omega2=payload.selected_omega2,
-                radius_fraction=0.16,
-                limit=8,
-            )
-            self._loop_candidate_index = 0
-            self._candidate_signature = signature
-        if not self._loop_candidates:
-            self._hint.setText("No nearby loops")
-            return
-        omega1, omega2, score = self._loop_candidates[self._loop_candidate_index % len(self._loop_candidates)]
-        self._loop_candidate_index += 1
-        self._hint.setText(
-            f"Nearby loop {self._loop_candidate_index}/{len(self._loop_candidates)}  score {score:.2f}"
-        )
-        self.seedSelected.emit(omega1, omega2)

@@ -10,6 +10,7 @@ except ImportError:  # pragma: no cover
     def njit(*args, **kwargs):
         def decorator(func):
             return func
+
         return decorator
 
     prange = range
@@ -107,16 +108,40 @@ def _rk4_step(
 
 
 @njit(cache=True)
-def _clamp01(value: float) -> float:
-    if value < 0.0:
-        return 0.0
-    if value > 1.0:
-        return 1.0
+def _wrap_pi(value: float) -> float:
+    while value <= -math.pi:
+        value += 2.0 * math.pi
+    while value > math.pi:
+        value -= 2.0 * math.pi
     return value
 
 
 @njit(cache=True)
-def _single_seed_metrics(
+def _state_distance(
+    theta1_a: float,
+    theta2_a: float,
+    omega1_a: float,
+    omega2_a: float,
+    theta1_b: float,
+    theta2_b: float,
+    omega1_b: float,
+    omega2_b: float,
+    omega_normalization: float,
+) -> float:
+    delta_theta1 = _wrap_pi(theta1_a - theta1_b)
+    delta_theta2 = _wrap_pi(theta2_a - theta2_b)
+    delta_omega1 = (omega1_a - omega1_b) / omega_normalization
+    delta_omega2 = (omega2_a - omega2_b) / omega_normalization
+    return math.sqrt(
+        delta_theta1 * delta_theta1
+        + delta_theta2 * delta_theta2
+        + delta_omega1 * delta_omega1
+        + delta_omega2 * delta_omega2
+    )
+
+
+@njit(cache=True)
+def _single_seed_divergence(
     theta1_init: float,
     theta2_init: float,
     omega1_init: float,
@@ -128,32 +153,55 @@ def _single_seed_metrics(
     gravity: float,
     duration: float,
     dt: float,
-    omega_scale: float,
-) -> tuple[float, float, float, float]:
+    delta_theta1: float,
+    delta_theta2: float,
+    delta_omega1: float,
+    delta_omega2: float,
+    omega_normalization: float,
+) -> float:
     steps = int(math.ceil(duration / dt)) + 1
-    lag_min = max(10, steps // 5)
-    theta1 = theta1_init
-    theta2 = theta2_init
-    omega1 = omega1_init
-    omega2 = omega2_init
-    s1 = math.sin(theta1)
-    c1 = math.cos(theta1)
-    s2 = math.sin(theta2)
-    c2 = math.cos(theta2)
-    initial_omega1 = omega1 / omega_scale
-    initial_omega2 = omega2 / omega_scale
-    recurrence_threshold = 0.24
-    min_distance = 1.0e12
-    best_step = steps
-    final_distance = 1.0e12
-    max_abs_omega = max(abs(omega1), abs(omega2))
+    theta1_a = theta1_init
+    theta2_a = theta2_init
+    omega1_a = omega1_init
+    omega2_a = omega2_init
+    theta1_b = theta1_init + delta_theta1
+    theta2_b = theta2_init + delta_theta2
+    omega1_b = omega1_init + delta_omega1
+    omega2_b = omega2_init + delta_omega2
 
-    for step in range(1, steps):
-        theta1, theta2, omega1, omega2 = _rk4_step(
-            theta1,
-            theta2,
-            omega1,
-            omega2,
+    d0 = _state_distance(
+        theta1_a,
+        theta2_a,
+        omega1_a,
+        omega2_a,
+        theta1_b,
+        theta2_b,
+        omega1_b,
+        omega2_b,
+        omega_normalization,
+    )
+    if not math.isfinite(d0) or d0 <= 0.0:
+        return math.inf
+    max_distance = d0
+
+    for _ in range(1, steps):
+        theta1_a, theta2_a, omega1_a, omega2_a = _rk4_step(
+            theta1_a,
+            theta2_a,
+            omega1_a,
+            omega2_a,
+            dt,
+            length1,
+            length2,
+            mass1,
+            mass2,
+            gravity,
+        )
+        theta1_b, theta2_b, omega1_b, omega2_b = _rk4_step(
+            theta1_b,
+            theta2_b,
+            omega1_b,
+            omega2_b,
             dt,
             length1,
             length2,
@@ -162,40 +210,37 @@ def _single_seed_metrics(
             gravity,
         )
         if not (
-            math.isfinite(theta1)
-            and math.isfinite(theta2)
-            and math.isfinite(omega1)
-            and math.isfinite(omega2)
+            math.isfinite(theta1_a)
+            and math.isfinite(theta2_a)
+            and math.isfinite(omega1_a)
+            and math.isfinite(omega2_a)
+            and math.isfinite(theta1_b)
+            and math.isfinite(theta2_b)
+            and math.isfinite(omega1_b)
+            and math.isfinite(omega2_b)
         ):
-            return 0.0, 1.0, 0.0, 0.0
-        if abs(theta1) > 1.0e6 or abs(theta2) > 1.0e6 or abs(omega1) > 1.0e6 or abs(omega2) > 1.0e6:
-            return 0.0, 1.0, 0.0, 0.0
-
-        max_abs_omega = max(max_abs_omega, abs(omega1), abs(omega2))
-        current_distance = math.sqrt(
-            (math.sin(theta1) - s1) ** 2
-            + (math.cos(theta1) - c1) ** 2
-            + (math.sin(theta2) - s2) ** 2
-            + (math.cos(theta2) - c2) ** 2
-            + ((omega1 / omega_scale) - initial_omega1) ** 2
-            + ((omega2 / omega_scale) - initial_omega2) ** 2
+            return math.inf
+        distance = _state_distance(
+            theta1_a,
+            theta2_a,
+            omega1_a,
+            omega2_a,
+            theta1_b,
+            theta2_b,
+            omega1_b,
+            omega2_b,
+            omega_normalization,
         )
-        final_distance = current_distance
-        if step >= lag_min and current_distance < min_distance:
-            min_distance = current_distance
-            best_step = step
+        if not math.isfinite(distance):
+            return math.inf
+        if distance > max_distance:
+            max_distance = distance
 
-    periodicity = _clamp01(1.0 - min_distance / recurrence_threshold)
-    drift_penalty = _clamp01(final_distance / (recurrence_threshold * 3.0))
-    energy_penalty = _clamp01(max_abs_omega / max(omega_scale * 2.2, 1.0))
-    chaos = _clamp01((1.0 - periodicity) * 0.68 + drift_penalty * 0.22 + energy_penalty * 0.10)
-    phase = 0.0 if best_step >= steps else (best_step % 48) / 48.0
-    loop_score = 0.0 if best_step >= steps else _clamp01(1.0 - (best_step / max(steps - 1, 1)))
-    return periodicity, chaos, phase, loop_score
+    return math.log10(max(max_distance / d0, 1.0))
 
 
 @njit(cache=True, parallel=True)
-def compute_tile_metrics(
+def compute_tile_divergence(
     omega1_values: np.ndarray,
     omega2_values: np.ndarray,
     theta1: float,
@@ -207,19 +252,19 @@ def compute_tile_metrics(
     gravity: float,
     duration: float,
     dt: float,
-    omega_scale: float,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    delta_theta1: float,
+    delta_theta2: float,
+    delta_omega1: float,
+    delta_omega2: float,
+    omega_normalization: float,
+) -> np.ndarray:
     count = omega1_values.size * omega2_values.size
-    periodicity_flat = np.zeros(count, dtype=np.float32)
-    chaos_flat = np.zeros(count, dtype=np.float32)
-    phase_flat = np.zeros(count, dtype=np.float32)
-    loop_flat = np.zeros(count, dtype=np.float32)
-
+    divergence_flat = np.empty(count, dtype=np.float32)
     width = omega1_values.size
     for index in prange(count):
         row = index // width
         col = index - row * width
-        periodicity, chaos, phase, loop_score = _single_seed_metrics(
+        divergence = _single_seed_divergence(
             theta1,
             theta2,
             omega1_values[col],
@@ -231,17 +276,12 @@ def compute_tile_metrics(
             gravity,
             duration,
             dt,
-            omega_scale,
+            delta_theta1,
+            delta_theta2,
+            delta_omega1,
+            delta_omega2,
+            omega_normalization,
         )
-        periodicity_flat[index] = periodicity
-        chaos_flat[index] = chaos
-        phase_flat[index] = phase
-        loop_flat[index] = loop_score
-
+        divergence_flat[index] = np.float32(divergence)
     height = omega2_values.size
-    return (
-        periodicity_flat.reshape((height, width)),
-        chaos_flat.reshape((height, width)),
-        phase_flat.reshape((height, width)),
-        loop_flat.reshape((height, width)),
-    )
+    return divergence_flat.reshape((height, width))

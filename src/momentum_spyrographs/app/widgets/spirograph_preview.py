@@ -7,6 +7,7 @@ from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QLinearGradient, QPainter, QPen
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
+from momentum_spyrographs.core.analysis_config import CANONICAL_WINDOW_SECONDS
 from momentum_spyrographs.core.discovery import describe_metrics
 from momentum_spyrographs.core.models import PreviewPayload, RenderSettings
 from momentum_spyrographs.core.render import glow_color, normalize_points, segment_style
@@ -24,6 +25,7 @@ class PreviewCanvas(QWidget):
         self._progress = 0.0
         self._status = "idle"
         self._error = ""
+        self._reference_only = True
         self._timer = QTimer(self)
         self._timer.setInterval(33)
         self._timer.timeout.connect(self._advance)
@@ -34,6 +36,7 @@ class PreviewCanvas(QWidget):
         if payload is not None:
             self._render_settings = payload.document.render_settings
         self._progress = 0.0
+        self._reference_only = True
         self.update()
 
     def set_render_settings(self, render_settings: RenderSettings) -> None:
@@ -47,6 +50,7 @@ class PreviewCanvas(QWidget):
 
     def play(self) -> None:
         if len(self._points) >= 2:
+            self._reference_only = False
             self._timer.start()
 
     def pause(self) -> None:
@@ -55,12 +59,20 @@ class PreviewCanvas(QWidget):
 
     def restart(self) -> None:
         self._progress = 0.0
+        self._reference_only = False
         self.play()
 
     def show_complete(self) -> None:
         """Show the full curve instantly without animating."""
         self._timer.stop()
         self._progress = 1.0
+        self._reference_only = False
+        self.update()
+
+    def show_reference(self) -> None:
+        self._timer.stop()
+        self._progress = 0.0
+        self._reference_only = True
         self.update()
 
     def _advance(self) -> None:
@@ -68,6 +80,8 @@ class PreviewCanvas(QWidget):
         self._progress = min(1.0, self._progress + increment)
         if math.isclose(self._progress, 1.0) or self._progress >= 1.0:
             self._timer.stop()
+            self._progress = 0.0
+            self._reference_only = True
         self.update()
 
     def paintEvent(self, event) -> None:  # type: ignore[override]
@@ -102,17 +116,18 @@ class PreviewCanvas(QWidget):
                 QPointF(float(scaled[index, 0]), float(scaled[index, 1])),
             )
 
-        for index in range(1, stop):
-            progress_ratio = index / max(len(scaled) - 1, 1)
-            age_ratio = 1.0 - (index / max(stop - 1, 1))
-            segment_color = _rgba_to_qcolor(segment_style(self._render_settings, progress_ratio, age_ratio, fidelity="full_glow_raster"))
-            pen = QPen(segment_color, max(1.0, self._render_settings.stroke_width))
-            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-            painter.setPen(pen)
-            painter.drawLine(
-                QPointF(float(scaled[index - 1, 0]), float(scaled[index - 1, 1])),
-                QPointF(float(scaled[index, 0]), float(scaled[index, 1])),
-            )
+        if not self._reference_only:
+            for index in range(1, stop):
+                progress_ratio = index / max(len(scaled) - 1, 1)
+                age_ratio = 1.0 - (index / max(stop - 1, 1))
+                segment_color = _rgba_to_qcolor(segment_style(self._render_settings, progress_ratio, age_ratio, fidelity="full_glow_raster"))
+                pen = QPen(segment_color, max(1.0, self._render_settings.stroke_width))
+                pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+                painter.setPen(pen)
+                painter.drawLine(
+                    QPointF(float(scaled[index - 1, 0]), float(scaled[index - 1, 1])),
+                    QPointF(float(scaled[index, 0]), float(scaled[index, 1])),
+                )
 
         if self._status == "loading":
             painter.setPen(QColor("#ff9d76"))
@@ -155,6 +170,7 @@ class SpirographPreview(QWidget):
         self.canvas = PreviewCanvas(self)
         self.status_label = QLabel("Preview ready", self)
         self._descriptor_label = QLabel("Calm Orbit", self)
+        self._metrics_label = QLabel("Turns 0.0 · Visual symmetry 0.00", self)
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -162,6 +178,7 @@ class SpirographPreview(QWidget):
         self.status_label.setStyleSheet("color: #6b83a8; font-size: 11px;")
         self._descriptor_label.setObjectName("descriptorLabel")
         self._descriptor_label.setStyleSheet("color: #ffb38f; font-weight: 600; font-size: 14px;")
+        self._metrics_label.setStyleSheet("color: #b8c9e4; font-size: 11px;")
 
         play_button = QPushButton("\u25b6 Play", self)
         pause_button = QPushButton("\u23f8 Pause", self)
@@ -184,6 +201,11 @@ class SpirographPreview(QWidget):
         header_row.addStretch(1)
         header_row.addWidget(self.status_label)
 
+        metrics_row = QHBoxLayout()
+        metrics_row.setSpacing(6)
+        metrics_row.addWidget(self._metrics_label)
+        metrics_row.addStretch(1)
+
         # Action buttons
         action_row = QHBoxLayout()
         action_row.setSpacing(6)
@@ -197,6 +219,7 @@ class SpirographPreview(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
         layout.addLayout(header_row)
+        layout.addLayout(metrics_row)
         layout.addLayout(action_row)
         layout.addWidget(self.canvas, 1)
 
@@ -205,7 +228,8 @@ class SpirographPreview(QWidget):
         if payload is not None:
             self.status_label.setText(f"{payload.selected_seed.space.title()} preview")
             self._descriptor_label.setText(describe_metrics(payload.metrics))
-            self.canvas.show_complete()
+            self._metrics_label.setText(self._format_trace_metrics(payload))
+            self.canvas.show_reference()
 
     def set_render_settings(self, render_settings: RenderSettings) -> None:
         self.canvas.set_render_settings(render_settings)
@@ -218,3 +242,9 @@ class SpirographPreview(QWidget):
         }
         self.status_label.setText(labels.get(status, status))
         self.canvas.set_status(status, error=error)
+
+    def _format_trace_metrics(self, payload: PreviewPayload) -> str:
+        return (
+            f"Turns {payload.metrics.turns_total:.1f}"
+            f" \u00b7 Visual symmetry {payload.metrics.visual_symmetry_score:.2f}"
+        )

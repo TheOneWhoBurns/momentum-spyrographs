@@ -60,11 +60,20 @@ def simulate_projected_points(
     seed: PendulumSeed,
     max_points: int | None = None,
 ) -> np.ndarray:
+    points, _ = simulate_projected_path(seed, max_points=max_points)
+    return points
+
+
+def simulate_projected_path(
+    seed: PendulumSeed,
+    max_points: int | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
     _, states = simulate(seed.to_config())
     points = project_points(states, seed, seed.space)
-    finite_mask = np.isfinite(points).all(axis=1)
-    points = points[finite_mask]
-    if max_points is not None and len(points) > max_points:
-        indices = np.linspace(0, len(points) - 1, max_points, dtype=int)
-        return points[indices]
-    return points
+    finite_mask = np.isfinite(points).all(axis=1) & np.isfinite(states).all(axis=1)
+    full_points = points[finite_mask]
+    full_states = states[finite_mask]
+    if max_points is not None and len(full_points) > max_points:
+        indices = np.linspace(0, len(full_points) - 1, max_points, dtype=int)
+        return full_points[indices], full_states
+    return full_points, full_states

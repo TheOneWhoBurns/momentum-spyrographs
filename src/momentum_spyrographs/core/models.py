@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
+from enum import Enum
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -83,19 +84,74 @@ class CreativeControls:
         return cls(**payload)
 
 
+class PeriodicityStatus(str, Enum):
+    NOT_PROVEN = "not_proven"
+    ANALYTICALLY_PROVEN = "analytically_proven"
+
+
+@dataclass(frozen=True)
+class TraceMetrics:
+    turns_total: float = 0.0
+    visual_symmetry_score: float = 0.0
+    circularity_score: float = 0.0
+    density_score: float = 0.0
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class CoherenceMetrics:
+    divergence_score: float = float("inf")
+    coherence_rank: float | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
 @dataclass(frozen=True)
 class SeedMetrics:
     energy: float = 0.0
     energy_score: float = 0.0
-    stability_score: float = 0.0
-    circularity_score: float = 0.0
-    density_score: float = 0.0
     chaos_score: float = 0.0
-    symmetry_score: float = 0.0
-    closure_score: float = 0.0
+    trace_metrics: TraceMetrics = field(default_factory=TraceMetrics)
+    coherence_metrics: CoherenceMetrics = field(default_factory=CoherenceMetrics)
+    periodicity_status: PeriodicityStatus = PeriodicityStatus.NOT_PROVEN
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+    @property
+    def symmetry_score(self) -> float:
+        return self.trace_metrics.visual_symmetry_score
+
+    @property
+    def visual_symmetry_score(self) -> float:
+        return self.trace_metrics.visual_symmetry_score
+
+    @property
+    def circularity_score(self) -> float:
+        return self.trace_metrics.circularity_score
+
+    @property
+    def density_score(self) -> float:
+        return self.trace_metrics.density_score
+
+    @property
+    def turns_total(self) -> float:
+        return self.trace_metrics.turns_total
+
+    @property
+    def divergence_score(self) -> float:
+        return self.coherence_metrics.divergence_score
+
+    @property
+    def coherence_rank(self) -> float:
+        return float(self.coherence_metrics.coherence_rank or 0.0)
+
+    @property
+    def stability_score(self) -> float:
+        return self.coherence_rank
 
 
 @dataclass(frozen=True)
@@ -212,11 +268,9 @@ class MapRequest:
 
 
 @dataclass(frozen=True)
-class StabilityMapPayload:
+class ExplorationMapPayload:
     image: np.ndarray
-    periodicity: np.ndarray
-    chaos: np.ndarray
-    loop_score: np.ndarray
+    divergence_grid: np.ndarray
     overlay_seed: PendulumSeed
     selected_omega1: float
     selected_omega2: float
@@ -225,9 +279,50 @@ class StabilityMapPayload:
     viewport_omega2_min: float
     viewport_omega2_max: float
     resolution_level: int
+    exact_resolution_level: int
     tile_size: int
     pending_tiles: int
     completed_tiles: int
+    minima_markers: tuple["RegionSearchMarker", ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True)
+class RegionSearchRequest:
+    mode: str
+    payload: ExplorationMapPayload
+    reference_seed: PendulumSeed
+    reference_points: np.ndarray
+    reference_metrics: SeedMetrics
+    omega1_min: float
+    omega1_max: float
+    omega2_min: float
+    omega2_max: float
+
+
+@dataclass(frozen=True)
+class RegionSearchMarker:
+    seed: PendulumSeed
+    score: float
+    pattern_similarity: float
+    divergence_score: float
+    metrics: SeedMetrics
+
+
+@dataclass(frozen=True)
+class RegionSearchResult:
+    mode: str
+    omega1_min: float
+    omega1_max: float
+    omega2_min: float
+    omega2_max: float
+    markers: tuple[RegionSearchMarker, ...]
+    status_text: str
+
+
+StabilityMapPayload = ExplorationMapPayload
+LoopSearchRequest = RegionSearchRequest
+LoopSearchMarker = RegionSearchMarker
+LoopSearchResult = RegionSearchResult
 
 
 @dataclass(frozen=True)

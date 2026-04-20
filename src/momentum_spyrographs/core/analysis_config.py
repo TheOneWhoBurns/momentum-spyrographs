@@ -1,0 +1,24 @@
+from __future__ import annotations
+
+from momentum_spyrographs.core.models import PendulumSeed
+
+
+CANONICAL_WINDOW_SECONDS = 24.0
+CANONICAL_DT = 0.02
+
+DIVERGENCE_DELTA_THETA1 = 1.0e-6
+DIVERGENCE_DELTA_THETA2 = 1.0e-6
+DIVERGENCE_DELTA_OMEGA1 = 0.0
+DIVERGENCE_DELTA_OMEGA2 = 0.0
+OMEGA_NORMALIZATION = 8.0
+
+DIVERGENCE_COLOR_MIN = 0.0
+DIVERGENCE_COLOR_MAX = 6.0
+EXACT_GRID_SCALE = 2
+EXACT_GRID_CAP = 512
+MARKER_DEDUP_CELLS = 3
+MARKER_LIMIT = 12
+
+
+def canonical_seed(seed: PendulumSeed) -> PendulumSeed:
+    return seed.with_updates(duration=CANONICAL_WINDOW_SECONDS, dt=CANONICAL_DT)

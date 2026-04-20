@@ -145,14 +145,9 @@ class AppState(QObject):
 
     def mark_saved(self, preset: PresetRecord) -> None:
         self._current_preset = preset
-        self._seed = preset.seed
-        self._creative_controls = preset.creative_controls
-        self._render_settings = preset.render_settings
-        self._map_viewport = default_viewport(self._seed)
         self._draft_name = preset.name
         self._set_dirty(False)
         self.presetChanged.emit(preset)
-        self._emit_document_changed()
 
     def rename_draft(self, name: str) -> None:
         self._draft_name = name
