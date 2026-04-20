@@ -98,12 +98,33 @@ def test_side_panels_are_collapsible(qtbot, tmp_path) -> None:
     qtbot.addWidget(window)
     window.show()
 
-    left_panel = window.centralWidget().widget(0).widget().layout().itemAt(0).widget()
-    right_panel = window.centralWidget().widget(2).widget().layout().itemAt(0).widget()
-    left_panel._toggle.click()
-    right_panel._toggle.click()
-    assert not left_panel._body.isVisible()
-    assert not right_panel._body.isVisible()
+    # Access the new SidebarFrame widgets directly from the window
+    left_sidebar = window._left_sidebar
+    right_sidebar = window._right_sidebar
+
+    # Both should start expanded
+    assert left_sidebar.expanded
+    assert right_sidebar.expanded
+
+    # Collapse both sidebars
+    left_sidebar.set_expanded(False)
+    right_sidebar.set_expanded(False)
+    assert not left_sidebar.expanded
+    assert not right_sidebar.expanded
+    # The expanded panel should be hidden; collapsed strip should be visible
+    assert not left_sidebar._expanded_panel.isVisible()
+    assert left_sidebar._collapsed_strip.isVisible()
+    assert not right_sidebar._expanded_panel.isVisible()
+    assert right_sidebar._collapsed_strip.isVisible()
+
+    # Expand them back
+    left_sidebar.set_expanded(True)
+    right_sidebar.set_expanded(True)
+    assert left_sidebar.expanded
+    assert right_sidebar.expanded
+    assert left_sidebar._expanded_panel.isVisible()
+    assert right_sidebar._expanded_panel.isVisible()
+
     window.preview_worker.shutdown()
     window.map_worker.shutdown()
     window.maybe_save_changes = lambda: True
@@ -162,6 +183,32 @@ def test_selection_only_map_update_reuses_cached_image(qtbot, tmp_path) -> None:
     window.map_panel._canvas.mousePressEvent(_FakeMouseEvent(map_rect.center()))
     window.map_panel._canvas.mouseReleaseEvent(_FakeMouseEvent(map_rect.center()))
     qtbot.waitUntil(lambda: window.map_panel._payload is not None and window.map_panel._payload.image is before, timeout=5000)
+    window.preview_worker.shutdown()
+    window.map_worker.shutdown()
+    window.maybe_save_changes = lambda: True
+    window.close()
+
+
+def test_zoom_button_clicks_accumulate_and_nearby_loop_button_updates_selection(qtbot, tmp_path) -> None:
+    window = MainWindow(preset_root=tmp_path)
+    qtbot.addWidget(window)
+    window.show()
+
+    qtbot.waitUntil(lambda: window.map_panel._payload is not None and window.map_panel._payload.resolution_level >= 512, timeout=30000)
+    initial_span = window.state.map_viewport.span_omega1
+    window.map_panel._zoom_in_button.click()
+    window.map_panel._zoom_in_button.click()
+    window.map_panel._zoom_in_button.click()
+    qtbot.waitUntil(lambda: window.state.map_viewport.span_omega1 < initial_span / 1.2, timeout=5000)
+
+    previous_omega1 = window.state.seed.omega1
+    previous_omega2 = window.state.seed.omega2
+    window.map_panel._find_loop_button.click()
+    qtbot.waitUntil(
+        lambda: abs(window.state.seed.omega1 - previous_omega1) > 1e-6 or abs(window.state.seed.omega2 - previous_omega2) > 1e-6,
+        timeout=5000,
+    )
+    assert "Nearby loop" in window.map_panel._hint.text()
     window.preview_worker.shutdown()
     window.map_worker.shutdown()
     window.maybe_save_changes = lambda: True

@@ -52,72 +52,72 @@ class StyleStudio(QWidget):
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(12)
+        layout.setSpacing(8)
 
         layout.addWidget(self._style_group("Background", self._build_background_group()))
         layout.addWidget(self._style_group("Line", self._build_line_group()))
         layout.addWidget(self._style_group("Fade", self._build_fade_group()))
         layout.addWidget(self._style_group("Glow", self._build_glow_group()))
         layout.addWidget(self._style_group("Motion", self._build_motion_group()))
-
-        export_button = QPushButton("Export…", self)
-        export_button.clicked.connect(self.exportRequested.emit)
-        layout.addWidget(export_button)
         layout.addStretch(1)
 
     def _style_group(self, title: str, body: QWidget) -> QWidget:
         group = QGroupBox(title, self)
         group_layout = QVBoxLayout(group)
-        group_layout.setContentsMargins(12, 14, 12, 12)
+        group_layout.setContentsMargins(10, 14, 10, 8)
         group_layout.addWidget(body)
         return group
 
     def _build_background_group(self) -> QWidget:
         widget = QWidget(self)
         form = QFormLayout(widget)
+        form.setSpacing(6)
         mode = self._combo("background_mode", ["solid", "gradient"])
         angle_row = self._slider_row("background_gradient_angle", 0, 360, "35°")
         form.addRow("Mode", mode)
-        form.addRow("Solid Hex", self._hex_edit("background_color"))
-        form.addRow("Gradient Start", self._hex_edit("background_gradient_start"))
-        form.addRow("Gradient End", self._hex_edit("background_gradient_end"))
-        form.addRow("Gradient Angle", angle_row)
+        form.addRow("Color", self._hex_edit("background_color"))
+        form.addRow("Start", self._hex_edit("background_gradient_start"))
+        form.addRow("End", self._hex_edit("background_gradient_end"))
+        form.addRow("Angle", angle_row)
         return widget
 
     def _build_line_group(self) -> QWidget:
         widget = QWidget(self)
         form = QFormLayout(widget)
+        form.setSpacing(6)
         mode = self._combo("stroke_mode", ["solid", "gradient"])
         width_row = self._slider_row("stroke_width", 10, 120, "2.4 px")
         form.addRow("Mode", mode)
-        form.addRow("Solid Hex", self._hex_edit("stroke_color"))
-        form.addRow("Gradient Start", self._hex_edit("stroke_gradient_start"))
-        form.addRow("Gradient End", self._hex_edit("stroke_gradient_end"))
-        form.addRow("Thickness", width_row)
+        form.addRow("Color", self._hex_edit("stroke_color"))
+        form.addRow("Start", self._hex_edit("stroke_gradient_start"))
+        form.addRow("End", self._hex_edit("stroke_gradient_end"))
+        form.addRow("Width", width_row)
         return widget
 
     def _build_fade_group(self) -> QWidget:
         widget = QWidget(self)
         form = QFormLayout(widget)
+        form.setSpacing(6)
         mode = self._combo("fade_mode", ["transparent", "color", "gradient"])
         strength_row = self._slider_row("fadeout", 0, 100, "0.35")
         form.addRow("Mode", mode)
         form.addRow("Strength", strength_row)
-        form.addRow("Fade Color", self._hex_edit("fade_color"))
-        form.addRow("Gradient Start", self._hex_edit("fade_gradient_start"))
-        form.addRow("Gradient End", self._hex_edit("fade_gradient_end"))
+        form.addRow("Color", self._hex_edit("fade_color"))
+        form.addRow("Start", self._hex_edit("fade_gradient_start"))
+        form.addRow("End", self._hex_edit("fade_gradient_end"))
         return widget
 
     def _build_glow_group(self) -> QWidget:
         widget = QWidget(self)
         form = QFormLayout(widget)
+        form.setSpacing(6)
         self._glow_toggle.toggled.connect(lambda value: self._emit_toggle("glow_enabled", bool(value)))
         mode = self._combo("glow_mode", ["match_line", "custom"])
         intensity_row = self._slider_row("glow_intensity", 0, 100, "0.40")
         radius_row = self._slider_row("glow_radius", 0, 400, "12 px")
         form.addRow(self._glow_toggle)
         form.addRow("Mode", mode)
-        form.addRow("Glow Hex", self._hex_edit("glow_color"))
+        form.addRow("Color", self._hex_edit("glow_color"))
         form.addRow("Intensity", intensity_row)
         form.addRow("Radius", radius_row)
         return widget

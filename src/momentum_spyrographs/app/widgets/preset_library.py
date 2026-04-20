@@ -7,6 +7,7 @@ from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
     QHBoxLayout,
+    QLabel,
     QLineEdit,
     QListWidget,
     QListWidgetItem,
@@ -38,6 +39,10 @@ class PresetLibrary(QWidget):
         self.search_input = QLineEdit(self)
         self.show_archived = QCheckBox("Show Archived", self)
         self.list_widget = QListWidget(self)
+        self._empty_hint = QLabel("No saved creations yet.\nAdjust the pendulum, then\nclick + New to save.", self)
+        self._empty_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._empty_hint.setWordWrap(True)
+        self._empty_hint.setStyleSheet("color: #4d6585; font-size: 12px; padding: 24px 8px;")
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -97,6 +102,7 @@ class PresetLibrary(QWidget):
         layout.addLayout(toolbar)
         layout.addWidget(self.search_input)
         layout.addWidget(self.show_archived)
+        layout.addWidget(self._empty_hint)
         layout.addWidget(self.list_widget, 1)
 
     def current_preset_id(self) -> str | None:
@@ -106,6 +112,8 @@ class PresetLibrary(QWidget):
         return item.data(Qt.ItemDataRole.UserRole)
 
     def set_presets(self, presets: list[PresetRecord], current_preset_id: str | None) -> None:
+        self._empty_hint.setVisible(len(presets) == 0)
+        self.list_widget.setVisible(len(presets) > 0)
         blocker = QSignalBlocker(self.list_widget)
         self.list_widget.clear()
         for preset in presets:

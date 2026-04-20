@@ -129,7 +129,7 @@ def _single_seed_metrics(
     duration: float,
     dt: float,
     omega_scale: float,
-) -> tuple[float, float, float]:
+) -> tuple[float, float, float, float]:
     steps = int(math.ceil(duration / dt)) + 1
     lag_min = max(10, steps // 5)
     theta1 = theta1_init
@@ -167,9 +167,9 @@ def _single_seed_metrics(
             and math.isfinite(omega1)
             and math.isfinite(omega2)
         ):
-            return 0.0, 1.0, 0.0
+            return 0.0, 1.0, 0.0, 0.0
         if abs(theta1) > 1.0e6 or abs(theta2) > 1.0e6 or abs(omega1) > 1.0e6 or abs(omega2) > 1.0e6:
-            return 0.0, 1.0, 0.0
+            return 0.0, 1.0, 0.0, 0.0
 
         max_abs_omega = max(max_abs_omega, abs(omega1), abs(omega2))
         current_distance = math.sqrt(
@@ -190,7 +190,8 @@ def _single_seed_metrics(
     energy_penalty = _clamp01(max_abs_omega / max(omega_scale * 2.2, 1.0))
     chaos = _clamp01((1.0 - periodicity) * 0.68 + drift_penalty * 0.22 + energy_penalty * 0.10)
     phase = 0.0 if best_step >= steps else (best_step % 48) / 48.0
-    return periodicity, chaos, phase
+    loop_score = 0.0 if best_step >= steps else _clamp01(1.0 - (best_step / max(steps - 1, 1)))
+    return periodicity, chaos, phase, loop_score
 
 
 @njit(cache=True, parallel=True)
@@ -207,17 +208,18 @@ def compute_tile_metrics(
     duration: float,
     dt: float,
     omega_scale: float,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     count = omega1_values.size * omega2_values.size
     periodicity_flat = np.zeros(count, dtype=np.float32)
     chaos_flat = np.zeros(count, dtype=np.float32)
     phase_flat = np.zeros(count, dtype=np.float32)
+    loop_flat = np.zeros(count, dtype=np.float32)
 
     width = omega1_values.size
     for index in prange(count):
         row = index // width
         col = index - row * width
-        periodicity, chaos, phase = _single_seed_metrics(
+        periodicity, chaos, phase, loop_score = _single_seed_metrics(
             theta1,
             theta2,
             omega1_values[col],
@@ -234,11 +236,12 @@ def compute_tile_metrics(
         periodicity_flat[index] = periodicity
         chaos_flat[index] = chaos
         phase_flat[index] = phase
+        loop_flat[index] = loop_score
 
     height = omega2_values.size
     return (
         periodicity_flat.reshape((height, width)),
         chaos_flat.reshape((height, width)),
         phase_flat.reshape((height, width)),
+        loop_flat.reshape((height, width)),
     )
-

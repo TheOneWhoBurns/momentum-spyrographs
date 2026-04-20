@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QAction, QCloseEvent
+from PySide6.QtGui import QAction, QCloseEvent, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QInputDialog,
@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
 from momentum_spyrographs.app.map_worker import MapWorker
 from momentum_spyrographs.app.preview_worker import PreviewWorker
 from momentum_spyrographs.app.state import AppState
-from momentum_spyrographs.app.widgets.collapsible_panel import CollapsiblePanel
+from momentum_spyrographs.app.widgets.collapsible_panel import SidebarFrame
 from momentum_spyrographs.app.widgets.export_dialog import ExportDialog
 from momentum_spyrographs.app.widgets.inspector_panel import InspectorPanel
 from momentum_spyrographs.app.widgets.preset_library import PresetLibrary
@@ -56,48 +56,63 @@ class MainWindow(QMainWindow):
         self._build_layout()
         self._build_menu()
         self._connect_signals()
+        self._build_shortcuts()
 
         self.state.new_draft()
         self.refresh_library()
         self.statusBar().showMessage(f"Preset storage: {self.store.root}")
 
+    # ------------------------------------------------------------------
+    # Layout
+    # ------------------------------------------------------------------
+
     def _build_layout(self) -> None:
-        center = QWidget(self)
-        center_layout = QVBoxLayout(center)
-        center_layout.setContentsMargins(0, 0, 0, 0)
-        center_layout.setSpacing(14)
+        # -- Center column: vertical splitter (preview on top, controls bottom)
+        preview_card = self._card("Preview", self.preview)
+        preview_card.setMinimumHeight(380)
 
-        top_row = QHBoxLayout()
-        top_row.setSpacing(14)
-        top_row.addWidget(self._card("Pendulum Setup", self.setup_panel), 7)
-        top_row.addWidget(self._card("Start-State Map", self.map_panel), 5)
-        center_layout.addLayout(top_row)
-        center_layout.addWidget(self._card("Preview", self.preview), 1)
+        controls_row = QWidget(self)
+        controls_layout = QHBoxLayout(controls_row)
+        controls_layout.setContentsMargins(0, 0, 0, 0)
+        controls_layout.setSpacing(14)
+        controls_layout.addWidget(self._card("Pendulum Setup", self.setup_panel), 7)
+        controls_layout.addWidget(self._card("Start-State Map", self.map_panel), 5)
+        controls_row.setMinimumHeight(220)
 
-        left = QWidget(self)
-        left_layout = QVBoxLayout(left)
-        left_layout.setContentsMargins(0, 0, 0, 0)
-        left_layout.setSpacing(14)
-        left_layout.addWidget(CollapsiblePanel("Saved Creations", self.library, parent=left))
-        left_layout.addStretch(1)
+        center_splitter = QSplitter(Qt.Orientation.Vertical, self)
+        center_splitter.setChildrenCollapsible(False)
+        center_splitter.addWidget(preview_card)
+        center_splitter.addWidget(controls_row)
+        center_splitter.setStretchFactor(0, 3)
+        center_splitter.setStretchFactor(1, 2)
 
-        right = QWidget(self)
-        right_layout = QVBoxLayout(right)
-        right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.setSpacing(14)
-        right_layout.addWidget(CollapsiblePanel("Style Studio", self.style_studio, parent=right), 1)
-        right_layout.addStretch(1)
+        # -- Left sidebar (SidebarFrame)
+        self._left_sidebar = SidebarFrame("Saved Creations", self.library, parent=self)
+        # -- Right sidebar (SidebarFrame)
+        self._right_sidebar = SidebarFrame("Style Studio", self.style_studio, parent=self)
 
-        root_splitter = QSplitter(Qt.Orientation.Horizontal, self)
-        root_splitter.setChildrenCollapsible(False)
-        root_splitter.addWidget(self._scroll_widget(left))
-        root_splitter.addWidget(center)
-        root_splitter.addWidget(self._scroll_widget(right))
-        root_splitter.setStretchFactor(0, 0)
-        root_splitter.setStretchFactor(1, 1)
-        root_splitter.setStretchFactor(2, 0)
-        root_splitter.setSizes([260, 840, 320])
-        self.setCentralWidget(root_splitter)
+        # -- Root horizontal splitter
+        self._root_splitter = QSplitter(Qt.Orientation.Horizontal, self)
+        self._root_splitter.setChildrenCollapsible(False)
+        self._root_splitter.addWidget(self._scroll_widget(self._left_sidebar))
+        self._root_splitter.addWidget(center_splitter)
+        self._root_splitter.addWidget(self._scroll_widget(self._right_sidebar))
+        self._root_splitter.setStretchFactor(0, 0)
+        self._root_splitter.setStretchFactor(1, 1)
+        self._root_splitter.setStretchFactor(2, 0)
+        self._root_splitter.setSizes([260, 820, 340])
+
+        self._left_sidebar.toggled.connect(lambda _: self._redistribute_splitter())
+        self._right_sidebar.toggled.connect(lambda _: self._redistribute_splitter())
+
+        self.setCentralWidget(self._root_splitter)
+
+    def _redistribute_splitter(self) -> None:
+        """Adjust splitter sizes when a sidebar collapses or expands."""
+        left_w = 260 if self._left_sidebar.expanded else 36
+        right_w = 340 if self._right_sidebar.expanded else 36
+        center_w = max(400, self._root_splitter.width() - left_w - right_w)
+        self._root_splitter.setSizes([left_w, center_w, right_w])
 
     def _card(self, title: str, body: QWidget) -> QWidget:
         container = QWidget(self)
@@ -124,6 +139,10 @@ class MainWindow(QMainWindow):
         scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         return scroll
 
+    # ------------------------------------------------------------------
+    # Menu & shortcuts
+    # ------------------------------------------------------------------
+
     def _build_menu(self) -> None:
         file_menu = self.menuBar().addMenu("&File")
         export_action = QAction("Export…", self)
@@ -139,6 +158,16 @@ class MainWindow(QMainWindow):
         file_menu.addAction(save_as_action)
         file_menu.addSeparator()
         file_menu.addAction(export_action)
+
+    def _build_shortcuts(self) -> None:
+        toggle_left = QShortcut(QKeySequence("Ctrl+1"), self)
+        toggle_left.activated.connect(self._left_sidebar.toggle)
+        toggle_right = QShortcut(QKeySequence("Ctrl+2"), self)
+        toggle_right.activated.connect(self._right_sidebar.toggle)
+
+    # ------------------------------------------------------------------
+    # Signal wiring
+    # ------------------------------------------------------------------
 
     def _connect_signals(self) -> None:
         self.state.documentChanged.connect(self._sync_ui_from_state)
@@ -162,6 +191,7 @@ class MainWindow(QMainWindow):
             lambda key, value: self.state.update_render_settings(**{key: value})
         )
         self.style_studio.exportRequested.connect(self.export_current)
+        self.preview.exportRequested.connect(self.export_current)
         self.setup_panel.seedChanged.connect(
             lambda key, value: self.state.update_seed(**{key: value})
         )
@@ -180,6 +210,10 @@ class MainWindow(QMainWindow):
         self.library.archivedFilterChanged.connect(lambda _: self.refresh_library())
         self.library.presetActivated.connect(self.open_preset)
 
+    # ------------------------------------------------------------------
+    # State sync helpers
+    # ------------------------------------------------------------------
+
     def _sync_ui_from_state(self, document) -> None:
         self.style_studio.set_render_settings(document.render_settings)
         self.preview.set_render_settings(document.render_settings)
@@ -193,6 +227,10 @@ class MainWindow(QMainWindow):
     def _update_window_title(self) -> None:
         dirty_mark = " *" if self.state.is_dirty else ""
         self.setWindowTitle(f"{self.state.display_name}{dirty_mark} | Momentum Spyrographs")
+
+    # ------------------------------------------------------------------
+    # Preview worker handlers
+    # ------------------------------------------------------------------
 
     def _handle_preview_started(self, request_id: int) -> None:
         self._latest_preview_id = request_id
@@ -212,6 +250,10 @@ class MainWindow(QMainWindow):
         self._latest_preview_error = message
         self.state.set_preview_status("error")
         self.statusBar().showMessage(f"Preview failed: {message}", 6000)
+
+    # ------------------------------------------------------------------
+    # Map worker handlers
+    # ------------------------------------------------------------------
 
     def _handle_map_started(self, request_id: int) -> None:
         self._latest_map_id = request_id
@@ -236,6 +278,10 @@ class MainWindow(QMainWindow):
 
     def _apply_map_seed(self, omega1: float, omega2: float) -> None:
         self.state.update_map_selection(omega1=omega1, omega2=omega2)
+
+    # ------------------------------------------------------------------
+    # Preset operations
+    # ------------------------------------------------------------------
 
     def refresh_library(self) -> None:
         presets = self.store.list_presets(
@@ -350,6 +396,10 @@ class MainWindow(QMainWindow):
             self.state.new_draft()
         self.refresh_library()
 
+    # ------------------------------------------------------------------
+    # Export
+    # ------------------------------------------------------------------
+
     def export_current(self) -> None:
         dialog = ExportDialog(self.state.display_name.replace(" ", "-").lower(), self.state.render_settings, self)
         if dialog.exec() != dialog.DialogCode.Accepted:
@@ -389,6 +439,10 @@ class MainWindow(QMainWindow):
                 fidelity=request.fidelity,
             )
         self.statusBar().showMessage(f"Exported {request.path}", 5000)
+
+    # ------------------------------------------------------------------
+    # Close
+    # ------------------------------------------------------------------
 
     def closeEvent(self, event: QCloseEvent) -> None:
         if self.maybe_save_changes():

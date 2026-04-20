@@ -6,7 +6,7 @@ from math import ceil
 from momentum_spyrographs.core.models import MapViewport, PendulumSeed
 
 
-TILE_SIZE = 64
+TILE_SIZE = 32
 RESOLUTION_LEVELS = (128, 256, 512)
 
 
@@ -141,4 +141,3 @@ def visible_tiles(
             ),
         )
     )
-

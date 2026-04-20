@@ -28,13 +28,14 @@ class MapWorker(QObject):
         self._level_cache: OrderedDict[tuple, StabilityMapPayload] = OrderedDict()
         self._final_cache_key: tuple | None = None
         self._final_payload: StabilityMapPayload | None = None
+        self._requested_serial = 0
 
     def request_map(self, request: MapRequest) -> None:
+        self._requested_serial += 1
         self._latest_request = request
         final_key = self._request_cache_key(request, RESOLUTION_LEVELS[-1])
         if self._final_cache_key == final_key and self._final_payload is not None:
-            self._latest_request_id += 1
-            request_id = self._latest_request_id
+            request_id = self._requested_serial
             self.mapStarted.emit(request_id)
             self.mapReady.emit(request_id, self._with_selection(self._final_payload, request))
             return
@@ -48,13 +49,15 @@ class MapWorker(QObject):
         if self._latest_request is None:
             return
         request = self._latest_request
-        self._latest_request_id += 1
-        request_id = self._latest_request_id
+        request_id = self._requested_serial
+        self._latest_request_id = request_id
         self.mapStarted.emit(request_id)
         future = self._executor.submit(self._compute_progressive, request)
         future.add_done_callback(lambda done, rid=request_id: self._handle_result(rid, done))
 
     def _handle_result(self, request_id: int, future: Future[list[StabilityMapPayload]]) -> None:
+        if request_id != self._requested_serial:
+            return
         try:
             payloads = future.result()
         except Exception as exc:  # pragma: no cover
@@ -100,6 +103,7 @@ class MapWorker(QObject):
             image=payload.image,
             periodicity=payload.periodicity,
             chaos=payload.chaos,
+            loop_score=payload.loop_score,
             overlay_seed=request.seed,
             selected_omega1=request.selected_omega1,
             selected_omega2=request.selected_omega2,
@@ -112,4 +116,3 @@ class MapWorker(QObject):
             pending_tiles=payload.pending_tiles,
             completed_tiles=payload.completed_tiles,
         )
-

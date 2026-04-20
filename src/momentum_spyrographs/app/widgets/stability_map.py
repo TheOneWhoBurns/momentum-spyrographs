@@ -7,6 +7,7 @@ from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWi
 
 from momentum_spyrographs.core.map_tiles import default_viewport, pan_viewport, zoom_viewport
 from momentum_spyrographs.core.models import MapViewport, PendulumSeed, StabilityMapPayload
+from momentum_spyrographs.core.stability_map import find_region_loop_candidates
 
 
 def _as_qpixmap(image: np.ndarray) -> QPixmap:
@@ -29,7 +30,7 @@ class StabilityMapCanvas(QWidget):
         self._pan_start: QPointF | None = None
         self._pan_origin: MapViewport | None = None
         self._dragging = False
-        self.setMinimumHeight(300)
+        self.setMinimumHeight(160)
         self.setMouseTracking(True)
 
     def set_payload(self, payload: StabilityMapPayload | None) -> None:
@@ -256,51 +257,68 @@ class StabilityMapWidget(QWidget):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._caption = QLabel(
-            "Warm bands indicate faster periodic return. Dark regions are more chaotic. Drag to pan, scroll to zoom.",
-            self,
-        )
-        self._caption.setWordWrap(True)
-        self._caption.setStyleSheet("color: #d9e7ff;")
-        self._axis_hint = QLabel("Arm 1 start speed  <->  Arm 2 start speed", self)
-        self._axis_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._axis_hint.setStyleSheet("color: #d7e4f8;")
         self._canvas = StabilityMapCanvas(self)
         self._canvas.seedSelected.connect(self.seedSelected.emit)
         self._canvas.viewportChanged.connect(self.viewportChanged.emit)
-        self._reset_button = QPushButton("Reset View", self)
-        self._zoom_in_button = QPushButton("Zoom In", self)
-        self._zoom_out_button = QPushButton("Zoom Out", self)
+        self._loop_candidates: list[tuple[float, float, float]] = []
+        self._loop_candidate_index = 0
+        self._candidate_signature: tuple[float, float, int] | None = None
+        self._canvas.setToolTip(
+            "Click to select start speeds\nDrag to pan \u00b7 Scroll to zoom"
+        )
+        self._reset_button = QPushButton("Reset", self)
+        self._zoom_out_button = QPushButton("\u2212", self)
+        self._zoom_in_button = QPushButton("+", self)
+        self._find_loop_button = QPushButton("Find Nearby Loop", self)
+        self._hint = QLabel("", self)
         self._build_ui()
         self._reset_button.clicked.connect(self._reset_view)
         self._zoom_in_button.clicked.connect(lambda: self._zoom(1.22))
         self._zoom_out_button.clicked.connect(lambda: self._zoom(1.0 / 1.22))
+        self._find_loop_button.clicked.connect(self._select_nearby_loop)
 
     @property
     def _payload(self) -> StabilityMapPayload | None:
         return self._canvas._payload
 
     def _build_ui(self) -> None:
-        toolbar = QWidget(self)
-        toolbar_layout = QHBoxLayout(toolbar)
-        toolbar_layout.setContentsMargins(0, 0, 0, 0)
-        toolbar_layout.setSpacing(8)
-        toolbar_layout.addWidget(self._reset_button)
-        toolbar_layout.addWidget(self._zoom_out_button)
-        toolbar_layout.addWidget(self._zoom_in_button)
-        toolbar_layout.addStretch(1)
+        for btn in (self._reset_button, self._zoom_out_button, self._zoom_in_button, self._find_loop_button):
+            btn.setObjectName("secondaryBtn")
+            btn.setFixedHeight(24)
+        self._zoom_out_button.setFixedWidth(32)
+        self._zoom_in_button.setFixedWidth(32)
+        self._zoom_out_button.setAutoRepeat(True)
+        self._zoom_in_button.setAutoRepeat(True)
+        self._zoom_out_button.setAutoRepeatDelay(140)
+        self._zoom_in_button.setAutoRepeatDelay(140)
+        self._zoom_out_button.setAutoRepeatInterval(75)
+        self._zoom_in_button.setAutoRepeatInterval(75)
+        self._hint.setStyleSheet("color: #d7e4f8;")
+
+        toolbar = QHBoxLayout()
+        toolbar.setContentsMargins(0, 0, 0, 0)
+        toolbar.setSpacing(4)
+        toolbar.addWidget(self._reset_button)
+        toolbar.addWidget(self._zoom_out_button)
+        toolbar.addWidget(self._zoom_in_button)
+        toolbar.addWidget(self._find_loop_button)
+        toolbar.addStretch(1)
+        toolbar.addWidget(self._hint)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(8)
-        layout.addWidget(self._caption)
-        layout.addWidget(toolbar)
+        layout.setSpacing(4)
+        layout.addLayout(toolbar)
         layout.addWidget(self._canvas, 1)
-        layout.addWidget(self._axis_hint)
-        self.setMinimumHeight(360)
+        self.setMinimumHeight(200)
 
     def set_payload(self, payload: StabilityMapPayload | None) -> None:
         self._canvas.set_payload(payload)
+        self._loop_candidates = []
+        self._loop_candidate_index = 0
+        self._candidate_signature = None
+        if payload is None:
+            self._hint.setText("")
 
     def set_status(self, status: str, error: str = "") -> None:
         self._canvas.set_status(status, error=error)
@@ -319,3 +337,31 @@ class StabilityMapWidget(QWidget):
         viewport = zoom_viewport(self.current_viewport(), zoom_factor=factor)
         self.viewportChanged.emit(viewport)
 
+    def _select_nearby_loop(self) -> None:
+        payload = self._payload
+        if payload is None:
+            return
+        signature = (
+            round(payload.selected_omega1, 5),
+            round(payload.selected_omega2, 5),
+            payload.resolution_level,
+        )
+        if signature != self._candidate_signature or not self._loop_candidates:
+            self._loop_candidates = find_region_loop_candidates(
+                payload,
+                center_omega1=payload.selected_omega1,
+                center_omega2=payload.selected_omega2,
+                radius_fraction=0.16,
+                limit=8,
+            )
+            self._loop_candidate_index = 0
+            self._candidate_signature = signature
+        if not self._loop_candidates:
+            self._hint.setText("No nearby loops")
+            return
+        omega1, omega2, score = self._loop_candidates[self._loop_candidate_index % len(self._loop_candidates)]
+        self._loop_candidate_index += 1
+        self._hint.setText(
+            f"Nearby loop {self._loop_candidate_index}/{len(self._loop_candidates)}  score {score:.2f}"
+        )
+        self.seedSelected.emit(omega1, omega2)

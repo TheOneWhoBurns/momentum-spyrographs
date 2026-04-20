@@ -216,6 +216,7 @@ class StabilityMapPayload:
     image: np.ndarray
     periodicity: np.ndarray
     chaos: np.ndarray
+    loop_score: np.ndarray
     overlay_seed: PendulumSeed
     selected_omega1: float
     selected_omega2: float

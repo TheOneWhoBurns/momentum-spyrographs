@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 
 import numpy as np
-from PySide6.QtCore import QPointF, QRectF, Qt, QTimer
+from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QLinearGradient, QPainter, QPen
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
@@ -151,6 +151,8 @@ class PreviewCanvas(QWidget):
 
 
 class SpirographPreview(QWidget):
+    exportRequested = Signal()
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.canvas = PreviewCanvas(self)
@@ -161,44 +163,44 @@ class SpirographPreview(QWidget):
 
     def _build_ui(self) -> None:
         self.status_label.setObjectName("previewStatusLabel")
-        self.status_label.setStyleSheet("color: #6b83a8; font-size: 12px;")
+        self.status_label.setStyleSheet("color: #6b83a8; font-size: 11px;")
         self._descriptor_label.setObjectName("descriptorLabel")
-        self._descriptor_label.setStyleSheet("color: #ffb38f; font-weight: 600; font-size: 15px;")
+        self._descriptor_label.setStyleSheet("color: #ffb38f; font-weight: 600; font-size: 14px;")
 
         play_button = QPushButton("Play", self)
         pause_button = QPushButton("Pause", self)
         restart_button = QPushButton("Restart", self)
         for btn in (play_button, pause_button, restart_button):
             btn.setObjectName("secondaryBtn")
-            btn.setFixedHeight(30)
+            btn.setFixedHeight(28)
         play_button.clicked.connect(self.canvas.play)
         pause_button.clicked.connect(self.canvas.pause)
         restart_button.clicked.connect(self.canvas.restart)
 
-        top_row = QHBoxLayout()
-        top_row.setSpacing(8)
-        top_row.addWidget(self._descriptor_label)
-        top_row.addStretch(1)
-        top_row.addWidget(self.status_label)
-        top_row.addWidget(play_button)
-        top_row.addWidget(pause_button)
-        top_row.addWidget(restart_button)
+        export_button = QPushButton("Export\u2026", self)
+        export_button.setFixedHeight(28)
+        export_button.clicked.connect(self.exportRequested.emit)
 
-        badge_row = QHBoxLayout()
-        badge_row.setSpacing(6)
+        header = QHBoxLayout()
+        header.setSpacing(6)
+        header.addWidget(self._descriptor_label)
         for badge in self._badges:
             badge.setStyleSheet(
                 "background: #141e34; color: #b8c9e4; border: 1px solid #1c2d4a;"
-                " border-radius: 10px; padding: 4px 10px; font-size: 11px;"
+                " border-radius: 8px; padding: 2px 8px; font-size: 10px;"
             )
-            badge_row.addWidget(badge)
-        badge_row.addStretch(1)
+            header.addWidget(badge)
+        header.addStretch(1)
+        header.addWidget(self.status_label)
+        header.addWidget(play_button)
+        header.addWidget(pause_button)
+        header.addWidget(restart_button)
+        header.addWidget(export_button)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(8)
-        layout.addLayout(top_row)
-        layout.addLayout(badge_row)
+        layout.setSpacing(6)
+        layout.addLayout(header)
         layout.addWidget(self.canvas, 1)
 
     def set_preview_payload(self, payload: PreviewPayload | None) -> None:

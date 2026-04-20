@@ -312,6 +312,25 @@ QToolTip {
 QDialog {
   background: #0d1321;
 }
+
+/* ═══ Sidebar Frames ═══ */
+#sidebarStrip {
+  background: #0e1528;
+  border-right: 1px solid #182844;
+}
+#sidebarToggle {
+  background: #141e34;
+  color: #8a9dba;
+  border: 1px solid #1c2d4a;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 700;
+}
+#sidebarToggle:hover {
+  background: #1a2844;
+  color: #ffb38f;
+  border-color: #2d4261;
+}
 """
 
 

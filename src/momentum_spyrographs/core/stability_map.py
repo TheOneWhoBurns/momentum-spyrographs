@@ -52,6 +52,83 @@ def _tile_axis_values(minimum: float, maximum: float, count: int, *, descending:
     return centers[::-1] if descending else centers
 
 
+def omega_to_grid_index(payload: StabilityMapPayload, omega1: float, omega2: float) -> tuple[int, int]:
+    height, width = payload.periodicity.shape
+    x_ratio = (omega1 - payload.viewport_omega1_min) / max(
+        payload.viewport_omega1_max - payload.viewport_omega1_min,
+        1e-9,
+    )
+    y_ratio = (payload.viewport_omega2_max - omega2) / max(
+        payload.viewport_omega2_max - payload.viewport_omega2_min,
+        1e-9,
+    )
+    col = int(np.clip(round(x_ratio * (width - 1)), 0, width - 1))
+    row = int(np.clip(round(y_ratio * (height - 1)), 0, height - 1))
+    return row, col
+
+
+def grid_index_to_omega(payload: StabilityMapPayload, row: int, col: int) -> tuple[float, float]:
+    height, width = payload.periodicity.shape
+    omega1 = payload.viewport_omega1_min + ((col + 0.5) / max(width, 1)) * (
+        payload.viewport_omega1_max - payload.viewport_omega1_min
+    )
+    omega2 = payload.viewport_omega2_max - ((row + 0.5) / max(height, 1)) * (
+        payload.viewport_omega2_max - payload.viewport_omega2_min
+    )
+    return float(omega1), float(omega2)
+
+
+def find_region_loop_candidates(
+    payload: StabilityMapPayload,
+    *,
+    center_omega1: float,
+    center_omega2: float,
+    radius_fraction: float = 0.16,
+    limit: int = 8,
+) -> list[tuple[float, float, float]]:
+    height, width = payload.periodicity.shape
+    center_row, center_col = omega_to_grid_index(payload, center_omega1, center_omega2)
+    radius_row = max(4, int(round(height * radius_fraction)))
+    radius_col = max(4, int(round(width * radius_fraction)))
+    row_min = max(1, center_row - radius_row)
+    row_max = min(height - 1, center_row + radius_row)
+    col_min = max(1, center_col - radius_col)
+    col_max = min(width - 1, center_col + radius_col)
+
+    periodicity = payload.periodicity[row_min:row_max, col_min:col_max]
+    chaos = payload.chaos[row_min:row_max, col_min:col_max]
+    loop_score = payload.loop_score[row_min:row_max, col_min:col_max]
+    local_score = loop_score * 0.72 + periodicity * 0.48 - chaos * 0.45
+
+    candidates: list[tuple[float, int, int]] = []
+    for row in range(1, local_score.shape[0] - 1):
+        for col in range(1, local_score.shape[1] - 1):
+            value = float(local_score[row, col])
+            if value < 0.12:
+                continue
+            neighborhood = local_score[row - 1 : row + 2, col - 1 : col + 2]
+            if value < float(np.max(neighborhood)):
+                continue
+            global_row = row_min + row
+            global_col = col_min + col
+            distance = np.hypot(global_row - center_row, global_col - center_col)
+            candidates.append((value - 0.012 * float(distance), global_row, global_col))
+
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    selected: list[tuple[float, float, float]] = []
+    taken_cells: list[tuple[int, int]] = []
+    min_spacing = max(3.0, 0.06 * max(height, width))
+    for score, row, col in candidates:
+        if any(np.hypot(row - taken_row, col - taken_col) < min_spacing for taken_row, taken_col in taken_cells):
+            continue
+        omega1, omega2 = grid_index_to_omega(payload, row, col)
+        selected.append((omega1, omega2, score))
+        taken_cells.append((row, col))
+        if len(selected) >= limit:
+            break
+    return selected
+
+
 def render_map_level(
     request: MapRequest,
     *,
@@ -66,6 +143,7 @@ def render_map_level(
     image = np.zeros((resolution_level, resolution_level, 3), dtype=np.uint8)
     periodicity = np.zeros((resolution_level, resolution_level), dtype=np.float32)
     chaos = np.ones((resolution_level, resolution_level), dtype=np.float32)
+    loop_score = np.zeros((resolution_level, resolution_level), dtype=np.float32)
 
     tiles = visible_tiles(viewport, resolution_level=resolution_level, tile_size=tile_size)
     total_tiles = len(tiles)
@@ -77,7 +155,7 @@ def render_map_level(
             tile.pixel_height,
             descending=True,
         )
-        tile_periodicity, tile_chaos, tile_phase = compute_tile_metrics(
+        tile_periodicity, tile_chaos, tile_phase, tile_loop_score = compute_tile_metrics(
             omega1_values,
             omega2_values,
             request.seed.theta1,
@@ -95,6 +173,7 @@ def render_map_level(
         x_slice = slice(tile.pixel_x, tile.pixel_x + tile.pixel_width)
         periodicity[y_slice, x_slice] = tile_periodicity
         chaos[y_slice, x_slice] = tile_chaos
+        loop_score[y_slice, x_slice] = tile_loop_score
         image[y_slice, x_slice] = _colorize_tile(tile_periodicity, tile_chaos, tile_phase)
         if progress_callback is not None:
             progress_callback(tile_index, total_tiles)
@@ -103,6 +182,7 @@ def render_map_level(
         image=image,
         periodicity=periodicity,
         chaos=chaos,
+        loop_score=loop_score,
         overlay_seed=request.seed,
         selected_omega1=request.selected_omega1,
         selected_omega2=request.selected_omega2,

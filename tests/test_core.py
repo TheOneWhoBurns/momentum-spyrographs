@@ -50,6 +50,7 @@ def test_stability_map_returns_color_grid_and_axes() -> None:
     assert payload.image.shape == (9, 9, 3)
     assert payload.periodicity.shape == (9, 9)
     assert payload.chaos.shape == (9, 9)
+    assert payload.loop_score.shape == (9, 9)
     assert payload.viewport_omega1_min < payload.viewport_omega1_max
     assert payload.viewport_omega2_min < payload.viewport_omega2_max
 
@@ -74,6 +75,7 @@ def test_render_map_level_returns_finite_high_resolution_payload() -> None:
     assert payload.image.shape == (64, 64, 3)
     assert np.isfinite(payload.periodicity).all()
     assert np.isfinite(payload.chaos).all()
+    assert np.isfinite(payload.loop_score).all()
 
 
 def test_visible_tiles_cover_requested_level() -> None:
@@ -81,6 +83,14 @@ def test_visible_tiles_cover_requested_level() -> None:
     tiles = visible_tiles(viewport, resolution_level=128, tile_size=64)
     assert len(tiles) == 4
     assert sum(tile.pixel_width * tile.pixel_height for tile in tiles) == 128 * 128
+
+
+def test_default_map_subdivision_is_denser_than_64_tiles_at_512() -> None:
+    payload = sample_stability_map(PendulumSeed(duration=4.0, dt=0.04), grid_size=64)
+    viewport = default_viewport(PendulumSeed(), pixel_size=512)
+    dense_tiles = visible_tiles(viewport, resolution_level=512)
+    assert payload.completed_tiles >= 4
+    assert len(dense_tiles) > 64
 
 
 def test_projected_points_filter_non_finite_rows() -> None:
