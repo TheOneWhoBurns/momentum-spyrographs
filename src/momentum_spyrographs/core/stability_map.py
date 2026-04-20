@@ -27,25 +27,28 @@ def _state_embedding(states: np.ndarray, omega_scale: float) -> np.ndarray:
     )
 
 
-def _periodicity_score(states: np.ndarray, omega_scale: float) -> float:
+def _periodicity_score(states: np.ndarray, omega_scale: float) -> tuple[float, float]:
     embedding = _state_embedding(states, omega_scale)
     lag_min = max(12, len(embedding) // 18)
     distances = np.linalg.norm(embedding[lag_min:] - embedding[0], axis=1)
     hits = np.where(distances < 0.16)[0]
     if hits.size == 0:
-        return 0.0
-    return clamp01(1.0 - ((hits[0] + lag_min) / max(len(embedding) - 1, 1)))
+        return 0.0, 0.0
+    return (
+        clamp01(1.0 - ((hits[0] + lag_min) / max(len(embedding) - 1, 1))),
+        ((hits[0] + lag_min) % 48) / 48.0,
+    )
 
 
-def _map_color(periodicity: float, chaos: float, density: float) -> tuple[int, int, int]:
+def _map_color(periodicity: float, chaos: float, density: float, phase: float) -> tuple[int, int, int]:
     if periodicity > 0.08:
-        hue = (0.12 + 0.76 * (1.0 - periodicity)) % 1.0
-        saturation = 0.82 - 0.18 * chaos
-        value = 0.72 + 0.25 * (1.0 - chaos)
+        hue = (0.04 + 0.92 * phase + 0.12 * density) % 1.0
+        saturation = 0.86 - 0.16 * chaos
+        value = 0.74 + 0.24 * periodicity
     else:
-        hue = 0.62 - 0.08 * (1.0 - chaos)
-        saturation = 0.40 + 0.18 * density
-        value = 0.05 + 0.38 * (1.0 - chaos) * (0.65 + 0.35 * density)
+        hue = 0.66 + 0.08 * density
+        saturation = 0.36 + 0.16 * density
+        value = 0.04 + 0.22 * (1.0 - chaos) * (0.55 + 0.45 * density)
     red, green, blue = colorsys.hsv_to_rgb(hue, clamp01(saturation), clamp01(value))
     return int(red * 255), int(green * 255), int(blue * 255)
 
@@ -53,7 +56,7 @@ def _map_color(periodicity: float, chaos: float, density: float) -> tuple[int, i
 def sample_stability_map(
     seed: PendulumSeed,
     *,
-    grid_size: int = 21,
+    grid_size: int = 41,
     velocity_limit: float | None = None,
 ) -> StabilityMapPayload:
     velocity_span = velocity_limit or max(3.0, min(10.0, max(abs(seed.omega1), abs(seed.omega2), 2.4) + 1.2))
@@ -66,8 +69,8 @@ def sample_stability_map(
     omega_scale = max(1.5, velocity_span)
 
     preview_seed = seed.with_updates(
-        duration=min(seed.duration, 12.0),
-        dt=max(seed.dt, 0.05),
+        duration=min(seed.duration, 8.0),
+        dt=max(seed.dt, 0.07),
         space="trace",
     )
 
@@ -81,7 +84,7 @@ def sample_stability_map(
             if len(points) < 24:
                 periodicity[row_index, col_index] = 0.0
                 chaos[row_index, col_index] = 1.0
-                image[row_index, col_index] = _map_color(0.0, 1.0, 0.0)
+                image[row_index, col_index] = _map_color(0.0, 1.0, 0.0, 0.0)
                 continue
             if len(points) > 420:
                 sample_indices = np.linspace(0, len(points) - 1, 420, dtype=int)
@@ -89,14 +92,15 @@ def sample_stability_map(
             else:
                 metric_points = points
             metrics = compute_seed_metrics(candidate, metric_points)
+            periodic_from_return, period_phase = _periodicity_score(states, omega_scale)
             periodic = max(
-                _periodicity_score(states, omega_scale),
+                periodic_from_return,
                 metrics.closure_score * (1.0 - 0.55 * metrics.chaos_score),
             )
             chaoticness = clamp01(max(metrics.chaos_score, 1.0 - metrics.stability_score))
             periodicity[row_index, col_index] = periodic
             chaos[row_index, col_index] = chaoticness
-            image[row_index, col_index] = _map_color(periodic, chaoticness, metrics.density_score)
+            image[row_index, col_index] = _map_color(periodic, chaoticness, metrics.density_score, period_phase)
 
     return StabilityMapPayload(
         omega1_values=omega1_values,
@@ -104,6 +108,7 @@ def sample_stability_map(
         image=image,
         periodicity=periodicity,
         chaos=chaos,
+        overlay_seed=seed,
         selected_omega1=seed.omega1,
         selected_omega2=seed.omega2,
     )

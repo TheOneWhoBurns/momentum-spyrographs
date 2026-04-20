@@ -22,9 +22,18 @@ class MapWorker(QObject):
         self._timer.timeout.connect(self._submit_latest)
         self._latest_document: PreviewDocument | None = None
         self._latest_request_id = 0
+        self._cached_key: tuple[float, ...] | None = None
+        self._cached_payload: StabilityMapPayload | None = None
 
     def request_map(self, document: PreviewDocument) -> None:
         self._latest_document = document
+        cache_key = self._seed_cache_key(document.seed)
+        if self._cached_key == cache_key and self._cached_payload is not None:
+            self._latest_request_id += 1
+            request_id = self._latest_request_id
+            self.mapStarted.emit(request_id)
+            self.mapReady.emit(request_id, self._with_selection(self._cached_payload, document))
+            return
         self._timer.start()
 
     def shutdown(self) -> None:
@@ -47,8 +56,37 @@ class MapWorker(QObject):
         except Exception as exc:  # pragma: no cover
             self.mapFailed.emit(request_id, str(exc))
             return
+        self._cached_key = self._seed_cache_key(payload.overlay_seed)
+        self._cached_payload = payload
         self.mapReady.emit(request_id, payload)
 
     @staticmethod
     def _compute_map(document: PreviewDocument) -> StabilityMapPayload:
         return sample_stability_map(document.seed)
+
+    @staticmethod
+    def _seed_cache_key(seed) -> tuple[float, ...]:
+        return (
+            round(seed.theta1, 4),
+            round(seed.theta2, 4),
+            round(seed.length1, 4),
+            round(seed.length2, 4),
+            round(seed.mass1, 4),
+            round(seed.mass2, 4),
+            round(seed.gravity, 4),
+            round(seed.duration, 4),
+            round(seed.dt, 5),
+        )
+
+    @staticmethod
+    def _with_selection(payload: StabilityMapPayload, document: PreviewDocument) -> StabilityMapPayload:
+        return StabilityMapPayload(
+            omega1_values=payload.omega1_values,
+            omega2_values=payload.omega2_values,
+            image=payload.image,
+            periodicity=payload.periodicity,
+            chaos=payload.chaos,
+            overlay_seed=document.seed,
+            selected_omega1=document.seed.omega1,
+            selected_omega2=document.seed.omega2,
+        )

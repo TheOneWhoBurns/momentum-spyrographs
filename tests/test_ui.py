@@ -69,6 +69,23 @@ def test_main_window_recomputes_preview_after_setup_change(qtbot, tmp_path) -> N
     window.close()
 
 
+def test_side_panels_are_collapsible(qtbot, tmp_path) -> None:
+    window = MainWindow(preset_root=tmp_path)
+    qtbot.addWidget(window)
+    window.show()
+
+    left_panel = window.centralWidget().widget(0).widget().layout().itemAt(0).widget()
+    right_panel = window.centralWidget().widget(2).widget().layout().itemAt(0).widget()
+    left_panel._toggle.click()
+    right_panel._toggle.click()
+    assert not left_panel._body.isVisible()
+    assert not right_panel._body.isVisible()
+    window.preview_worker.shutdown()
+    window.map_worker.shutdown()
+    window.maybe_save_changes = lambda: True
+    window.close()
+
+
 def test_advanced_panel_expands_and_map_click_updates_seed(qtbot, tmp_path) -> None:
     window = MainWindow(preset_root=tmp_path)
     qtbot.addWidget(window)

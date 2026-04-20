@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 from momentum_spyrographs.app.map_worker import MapWorker
 from momentum_spyrographs.app.preview_worker import PreviewWorker
 from momentum_spyrographs.app.state import AppState
+from momentum_spyrographs.app.widgets.collapsible_panel import CollapsiblePanel
 from momentum_spyrographs.app.widgets.export_dialog import ExportDialog
 from momentum_spyrographs.app.widgets.inspector_panel import InspectorPanel
 from momentum_spyrographs.app.widgets.preset_library import PresetLibrary
@@ -73,16 +74,23 @@ class MainWindow(QMainWindow):
         center_layout.addLayout(top_row)
         center_layout.addWidget(self._card("Preview", self.preview), 1)
 
+        left = QWidget(self)
+        left_layout = QVBoxLayout(left)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(12)
+        left_layout.addWidget(CollapsiblePanel("Saved Creations", self.library, parent=left))
+        left_layout.addStretch(1)
+
         right = QWidget(self)
         right_layout = QVBoxLayout(right)
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.setSpacing(12)
-        right_layout.addWidget(self._card("Style Studio", self.style_studio), 1)
+        right_layout.addWidget(CollapsiblePanel("Style Studio", self.style_studio, parent=right), 1)
         right_layout.addStretch(1)
 
         root_splitter = QSplitter(Qt.Orientation.Horizontal, self)
         root_splitter.setChildrenCollapsible(False)
-        root_splitter.addWidget(self._scroll_card("Saved Creations", self.library))
+        root_splitter.addWidget(self._scroll_widget(left))
         root_splitter.addWidget(center)
         root_splitter.addWidget(self._scroll_widget(right))
         root_splitter.setStretchFactor(0, 0)
@@ -102,9 +110,6 @@ class MainWindow(QMainWindow):
         layout.addWidget(body, 1)
         container.setObjectName("card")
         return container
-
-    def _scroll_card(self, title: str, body: QWidget) -> QWidget:
-        return self._scroll_widget(self._card(title, body))
 
     def _scroll_widget(self, widget: QWidget) -> QScrollArea:
         scroll = QScrollArea(self)

@@ -83,6 +83,7 @@ class StabilityMapCanvas(QWidget):
                 self._omega_to_x(self._payload.selected_omega1, map_rect),
                 self._omega_to_y(self._payload.selected_omega2, map_rect),
             )
+            self._paint_pendulum_overlay(painter, map_rect, marker)
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.setPen(QPen(QColor("#ffffff"), 2))
             painter.drawEllipse(marker, 6.0, 6.0)
@@ -117,6 +118,66 @@ class StabilityMapCanvas(QWidget):
         assert self._payload is not None
         ratio = (self._payload.omega2_values[-1] - omega_value) / max(self._payload.omega2_values[-1] - self._payload.omega2_values[0], 1e-9)
         return rect.top() + ratio * rect.height()
+
+    def _paint_pendulum_overlay(self, painter: QPainter, map_rect: QRectF, marker: QPointF) -> None:
+        assert self._payload is not None
+        seed = self._payload.overlay_seed
+        max_span = max(seed.length1 + seed.length2, 1e-6)
+        overlay_radius = map_rect.width() * 0.075
+        scale = overlay_radius / max_span
+
+        bob1_local = QPointF(
+            seed.length1 * scale * np.sin(seed.theta1),
+            seed.length1 * scale * np.cos(seed.theta1),
+        )
+        bob2_local = QPointF(
+            bob1_local.x() + seed.length2 * scale * np.sin(seed.theta2),
+            bob1_local.y() + seed.length2 * scale * np.cos(seed.theta2),
+        )
+        pivot = QPointF(marker.x() - bob2_local.x(), marker.y() - bob2_local.y())
+        bob1 = QPointF(pivot.x() + bob1_local.x(), pivot.y() + bob1_local.y())
+        bob2 = QPointF(pivot.x() + bob2_local.x(), pivot.y() + bob2_local.y())
+
+        left = min(pivot.x(), bob1.x(), bob2.x())
+        right = max(pivot.x(), bob1.x(), bob2.x())
+        top = min(pivot.y(), bob1.y(), bob2.y())
+        bottom = max(pivot.y(), bob1.y(), bob2.y())
+        shift_x = 0.0
+        shift_y = 0.0
+        margin = 10.0
+        if left < map_rect.left() + margin:
+            shift_x = map_rect.left() + margin - left
+        elif right > map_rect.right() - margin:
+            shift_x = map_rect.right() - margin - right
+        if top < map_rect.top() + margin:
+            shift_y = map_rect.top() + margin - top
+        elif bottom > map_rect.bottom() - margin:
+            shift_y = map_rect.bottom() - margin - bottom
+        if shift_x or shift_y:
+            offset = QPointF(shift_x, shift_y)
+            pivot = pivot + offset
+            bob1 = bob1 + offset
+            bob2 = bob2 + offset
+
+        halo_pen = QPen(QColor(9, 14, 24, 180), 12)
+        halo_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(halo_pen)
+        painter.drawLine(pivot, bob1)
+        painter.drawLine(bob1, bob2)
+
+        rod_pen = QPen(QColor("#d7e4f8"), 3)
+        rod_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(rod_pen)
+        painter.drawLine(pivot, bob1)
+        painter.drawLine(bob1, bob2)
+
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor("#ff9d76"))
+        painter.drawEllipse(pivot, 6.0, 6.0)
+        painter.setBrush(QColor("#73d2de"))
+        painter.drawEllipse(bob1, 10.0, 10.0)
+        painter.setBrush(QColor("#ffb36b"))
+        painter.drawEllipse(bob2, 10.0, 10.0)
 
 
 class StabilityMapWidget(QWidget):
