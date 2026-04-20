@@ -1,0 +1,64 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+  release:
+    types: [published]
+
+jobs:
+  test-and-build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Sync dependencies
+        run: uv sync --extra dev
+
+      - name: Run tests
+        shell: bash
+        run: |
+          if [[ "${{ runner.os }}" == "Linux" ]]; then
+            xvfb-run -a uv run pytest
+          else
+            uv run pytest
+          fi
+
+      - name: Build desktop bundle
+        shell: bash
+        run: |
+          uv run pyinstaller --noconfirm --windowed --name momentum-spyrographs src/momentum_spyrographs/__main__.py --paths src
+          if [[ "${{ runner.os }}" == "Linux" ]]; then
+            tar -C dist -czf momentum-spyrographs-${{ runner.os }}.tar.gz momentum-spyrographs
+          else
+            cd dist
+            python - <<'PY'
+import os
+import shutil
+runner = os.environ["RUNNER_OS"]
+base = "momentum-spyrographs"
+root = base + (".app" if runner == "macOS" else "")
+archive = f"{base}-{runner}"
+shutil.make_archive(archive, "zip", ".", root)
+PY
+            cd ..
+          fi
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: momentum-spyrographs-${{ runner.os }}
+          path: |
+            dist/*.zip
+            *.tar.gz
