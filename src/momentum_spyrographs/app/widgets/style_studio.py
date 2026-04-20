@@ -4,7 +4,7 @@ import re
 
 from PySide6.QtCore import QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPen
-from PySide6.QtWidgets import QCheckBox, QComboBox, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QPushButton, QSlider, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QCheckBox, QComboBox, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QSizePolicy, QSlider, QToolButton, QVBoxLayout, QWidget
 
 from momentum_spyrographs.core.models import RenderSettings
 
@@ -54,19 +54,36 @@ class StyleStudio(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
 
-        layout.addWidget(self._style_group("Background", self._build_background_group()))
-        layout.addWidget(self._style_group("Line", self._build_line_group()))
-        layout.addWidget(self._style_group("Fade", self._build_fade_group()))
-        layout.addWidget(self._style_group("Glow", self._build_glow_group()))
-        layout.addWidget(self._style_group("Motion", self._build_motion_group()))
+        layout.addWidget(self._style_group("Line", self._build_line_group(), expanded=True))
+        layout.addWidget(self._style_group("Background", self._build_background_group(), expanded=False))
+        layout.addWidget(self._style_group("Fade", self._build_fade_group(), expanded=False))
+        layout.addWidget(self._style_group("Glow", self._build_glow_group(), expanded=False))
+        layout.addWidget(self._style_group("Motion", self._build_motion_group(), expanded=False))
         layout.addStretch(1)
 
-    def _style_group(self, title: str, body: QWidget) -> QWidget:
-        group = QGroupBox(title, self)
-        group_layout = QVBoxLayout(group)
-        group_layout.setContentsMargins(10, 14, 10, 8)
-        group_layout.addWidget(body)
-        return group
+    def _style_group(self, title: str, body: QWidget, *, expanded: bool = True) -> QWidget:
+        container = QWidget(self)
+        toggle = QToolButton(container)
+        toggle.setText(f"  {title}")
+        toggle.setCheckable(True)
+        toggle.setChecked(expanded)
+        toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        toggle.setArrowType(Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow)
+        toggle.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+        def on_toggle(checked: bool) -> None:
+            toggle.setArrowType(Qt.ArrowType.DownArrow if checked else Qt.ArrowType.RightArrow)
+            body.setVisible(checked)
+
+        toggle.toggled.connect(on_toggle)
+        body.setVisible(expanded)
+
+        container_layout = QVBoxLayout(container)
+        container_layout.setContentsMargins(0, 0, 0, 0)
+        container_layout.setSpacing(4)
+        container_layout.addWidget(toggle)
+        container_layout.addWidget(body)
+        return container
 
     def _build_background_group(self) -> QWidget:
         widget = QWidget(self)

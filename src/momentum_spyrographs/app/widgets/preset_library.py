@@ -56,11 +56,11 @@ class PresetLibrary(QWidget):
         toolbar = QHBoxLayout()
         toolbar.setSpacing(6)
 
-        new_btn = QPushButton("+ New", self)
+        new_btn = QPushButton("\u2726 New", self)
         new_btn.setFixedHeight(32)
         new_btn.clicked.connect(self.newRequested.emit)
 
-        save_btn = QPushButton("Save", self)
+        save_btn = QPushButton("\u2193 Save", self)
         save_btn.setObjectName("secondaryBtn")
         save_btn.setFixedHeight(32)
         save_btn.clicked.connect(self.saveRequested.emit)

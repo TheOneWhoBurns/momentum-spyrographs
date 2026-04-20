@@ -29,6 +29,8 @@ class AppState(QObject):
     previewResultChanged = Signal(object)
     mapStatusChanged = Signal(str)
     mapResultChanged = Signal(object)
+    undoAvailableChanged = Signal(bool)
+    redoAvailableChanged = Signal(bool)
 
     def __init__(self) -> None:
         super().__init__()
@@ -43,6 +45,9 @@ class AppState(QObject):
         self._preview_payload: PreviewPayload | None = None
         self._map_status = "idle"
         self._map_payload = None
+        self._history: list[tuple] = []
+        self._history_index: int = -1
+        self._max_history: int = 50
 
     @property
     def seed(self) -> PendulumSeed:
@@ -117,6 +122,8 @@ class AppState(QObject):
         self._draft_name = default_preset_name()
         self._preview_payload = None
         self._map_payload = None
+        self._history = []
+        self._history_index = -1
         self._set_dirty(False)
         self.presetChanged.emit(None)
         self._emit_document_changed()
@@ -130,6 +137,8 @@ class AppState(QObject):
         self._draft_name = preset.name
         self._preview_payload = None
         self._map_payload = None
+        self._history = []
+        self._history_index = -1
         self._set_dirty(False)
         self.presetChanged.emit(preset)
         self._emit_document_changed()
@@ -170,7 +179,18 @@ class AppState(QObject):
         self.mapRequested.emit(self.map_request())
 
     def update_map_selection(self, omega1: float, omega2: float) -> None:
-        self.update_seed(omega1=omega1, omega2=omega2)
+        if not self._history:
+            self._history.append((self._seed.omega1, self._seed.omega2))
+            self._history_index = 0
+        self._history = self._history[: self._history_index + 1]
+        self._history.append((omega1, omega2))
+        if len(self._history) > self._max_history:
+            self._history = self._history[-self._max_history :]
+        self._history_index = len(self._history) - 1
+        self._emit_history_state()
+        self._seed = replace(self._seed, omega1=omega1, omega2=omega2)
+        self._set_dirty(True)
+        self._broadcast_document()
 
     def apply_suggestion_seed(self, seed: PendulumSeed) -> None:
         self._seed = seed
@@ -216,8 +236,44 @@ class AppState(QObject):
         self._dirty = value
         self.dirtyChanged.emit(value)
 
-    def _emit_document_changed(self) -> None:
+    def undo(self) -> None:
+        """Undo the last map click position."""
+        if self._history_index <= 0:
+            return
+        self._history_index -= 1
+        self._restore_from_history()
+
+    def redo(self) -> None:
+        """Redo the next map click position."""
+        if self._history_index >= len(self._history) - 1:
+            return
+        self._history_index += 1
+        self._restore_from_history()
+
+    @property
+    def can_undo(self) -> bool:
+        return self._history_index > 0
+
+    @property
+    def can_redo(self) -> bool:
+        return self._history_index < len(self._history) - 1
+
+    def _restore_from_history(self) -> None:
+        omega1, omega2 = self._history[self._history_index]
+        self._seed = replace(self._seed, omega1=omega1, omega2=omega2)
+        self._set_dirty(True)
+        self._emit_history_state()
+        self._broadcast_document()
+
+    def _emit_history_state(self) -> None:
+        self.undoAvailableChanged.emit(self.can_undo)
+        self.redoAvailableChanged.emit(self.can_redo)
+
+    def _broadcast_document(self) -> None:
         document = self.document()
         self.documentChanged.emit(document)
         self.previewRequested.emit(document)
         self.mapRequested.emit(self.map_request())
+
+    def _emit_document_changed(self) -> None:
+        self._broadcast_document()

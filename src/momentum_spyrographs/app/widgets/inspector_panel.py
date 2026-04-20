@@ -3,14 +3,11 @@ from __future__ import annotations
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QComboBox,
-    QDoubleSpinBox,
-    QFormLayout,
     QFrame,
-    QGroupBox,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QSlider,
-    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -36,134 +33,90 @@ class InspectorPanel(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._syncing = False
-        self._spin_boxes: dict[str, QDoubleSpinBox] = {}
         self._direction_boxes: dict[int, QComboBox] = {}
         self._energy_sliders: dict[int, QSlider] = {}
         self._energy_labels: dict[int, QLabel] = {}
         self._length_sliders: dict[int, QSlider] = {}
         self._length_labels: dict[int, QLabel] = {}
-        self._space_combo = QComboBox(self)
         self.pendulum_canvas = PendulumCanvas(self)
-        self._toggle = QToolButton(self)
-        self._content = QWidget(self)
         self._build_ui()
 
     def _build_ui(self) -> None:
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(10)
+        root = QHBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(10)
 
-        self.pendulum_canvas.setMinimumHeight(300)
-        layout.addWidget(self.pendulum_canvas)
+        # Left: pendulum canvas
+        self.pendulum_canvas.setMinimumSize(140, 140)
+        root.addWidget(self.pendulum_canvas, 1)
 
-        arm_row = QHBoxLayout()
-        arm_row.setSpacing(10)
-        arm_row.addWidget(self._arm_group(1), 1)
-        arm_row.addWidget(self._arm_group(2), 1)
-        layout.addLayout(arm_row)
+        # Right: compact arm grid
+        controls = QVBoxLayout()
+        controls.setSpacing(6)
 
-        self._toggle.setText("Advanced Physics")
-        self._toggle.setCheckable(True)
-        self._toggle.setChecked(False)
-        self._toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-        self._toggle.setArrowType(Qt.ArrowType.RightArrow)
-        self._toggle.toggled.connect(self._set_expanded)
-        layout.addWidget(self._toggle)
+        arm_frame = QFrame(self)
+        arm_frame.setObjectName("inspectorSection")
+        grid = QGridLayout(arm_frame)
+        grid.setContentsMargins(8, 6, 8, 6)
+        grid.setSpacing(4)
+        grid.setColumnStretch(2, 1)
+        grid.setColumnStretch(4, 1)
 
-        content_layout = QVBoxLayout(self._content)
-        content_layout.setContentsMargins(0, 0, 0, 0)
-        content_layout.setSpacing(8)
+        for col, text in [(1, "Dir"), (2, "Speed"), (4, "Length")]:
+            lbl = QLabel(text, arm_frame)
+            lbl.setStyleSheet("color: #6b83a8; font-size: 10px;")
+            grid.addWidget(lbl, 0, col)
 
-        form_frame = QFrame(self._content)
-        form_frame.setObjectName("inspectorSection")
-        form_layout = QFormLayout(form_frame)
-        form_layout.addRow("Projection", self._space_combo)
-        self._space_combo.addItems(["trace", "momentum", "omega", "angle"])
-        self._space_combo.currentTextChanged.connect(self._emit_space)
+        for row, arm in enumerate([1, 2], start=1):
+            title = QLabel(f"Arm {arm}", arm_frame)
+            title.setStyleSheet("color: #ffb38f; font-weight: 600; font-size: 12px;")
+            grid.addWidget(title, row, 0)
 
-        for key, minimum, maximum, step, decimals in [
-            ("theta1", -6.3, 6.3, 0.01, 3),
-            ("theta2", -6.3, 6.3, 0.01, 3),
-            ("omega1", -10.0, 10.0, 0.01, 3),
-            ("omega2", -10.0, 10.0, 0.01, 3),
-            ("length1", 0.1, 5.0, 0.05, 2),
-            ("length2", 0.1, 5.0, 0.05, 2),
-            ("mass1", 0.1, 10.0, 0.1, 2),
-            ("mass2", 0.1, 10.0, 0.1, 2),
-            ("gravity", 0.1, 30.0, 0.1, 2),
-            ("duration", 1.0, 240.0, 1.0, 1),
-            ("dt", 0.001, 0.1, 0.001, 3),
-        ]:
-            box = QDoubleSpinBox(form_frame)
-            box.setRange(minimum, maximum)
-            box.setSingleStep(step)
-            box.setDecimals(decimals)
-            box.valueChanged.connect(lambda value, name=key: self._emit_seed(name, value))
-            self._spin_boxes[key] = box
-            form_layout.addRow(key.replace("theta", "theta ").replace("omega", "omega ").title(), box)
-        content_layout.addWidget(form_frame)
-        content_layout.addStretch(1)
+            direction = QComboBox(arm_frame)
+            direction.addItem("\u21bb CW", 1.0)
+            direction.addItem("\u21ba CCW", -1.0)
+            direction.setFixedWidth(78)
+            direction.setToolTip("Rotation direction")
+            direction.currentTextChanged.connect(lambda _t, a=arm: self._emit_arm_velocity(a))
+            self._direction_boxes[arm] = direction
+            grid.addWidget(direction, row, 1)
 
-        self._content.setVisible(False)
-        layout.addWidget(self._content)
+            e_slider = QSlider(Qt.Orientation.Horizontal, arm_frame)
+            e_slider.setRange(0, 1000)
+            e_slider.setToolTip("Angular velocity \u2014 how fast this arm spins")
+            e_slider.valueChanged.connect(lambda v, a=arm: self._update_energy_label(a, v))
+            e_slider.valueChanged.connect(lambda _v, a=arm: self._emit_arm_velocity(a))
+            self._energy_sliders[arm] = e_slider
+            grid.addWidget(e_slider, row, 2)
+
+            e_label = QLabel("0.00", arm_frame)
+            e_label.setFixedWidth(34)
+            self._energy_labels[arm] = e_label
+            grid.addWidget(e_label, row, 3)
+
+            l_slider = QSlider(Qt.Orientation.Horizontal, arm_frame)
+            l_slider.setRange(20, 300)
+            l_slider.setToolTip("Physical length of this arm")
+            l_slider.valueChanged.connect(lambda v, a=arm: self._update_length_label(a, v))
+            l_slider.valueChanged.connect(lambda _v, a=arm: self._emit_arm_length(a))
+            self._length_sliders[arm] = l_slider
+            grid.addWidget(l_slider, row, 4)
+
+            l_label = QLabel("1.00", arm_frame)
+            l_label.setFixedWidth(34)
+            self._length_labels[arm] = l_label
+            grid.addWidget(l_label, row, 5)
+
+        controls.addWidget(arm_frame)
+        controls.addStretch(1)
+
+        root.addLayout(controls, 1)
         self.pendulum_canvas.anglesChanged.connect(self._emit_pair)
-
-    def _arm_group(self, arm_index: int) -> QWidget:
-        group = QGroupBox(f"Arm {arm_index}", self)
-        form = QFormLayout(group)
-
-        direction = QComboBox(group)
-        direction.addItem("Clockwise", 1.0)
-        direction.addItem("Counterclockwise", -1.0)
-        direction.currentTextChanged.connect(lambda _text, arm=arm_index: self._emit_arm_velocity(arm))
-        self._direction_boxes[arm_index] = direction
-
-        energy_slider = QSlider(Qt.Orientation.Horizontal, group)
-        energy_slider.setRange(0, 1000)
-        energy_slider.valueChanged.connect(lambda value, arm=arm_index: self._update_energy_label(arm, value))
-        energy_slider.valueChanged.connect(lambda _value, arm=arm_index: self._emit_arm_velocity(arm))
-        self._energy_sliders[arm_index] = energy_slider
-
-        energy_label = QLabel("0.00", group)
-        self._energy_labels[arm_index] = energy_label
-
-        energy_row = QWidget(group)
-        energy_layout = QHBoxLayout(energy_row)
-        energy_layout.setContentsMargins(0, 0, 0, 0)
-        energy_layout.addWidget(energy_slider, 1)
-        energy_layout.addWidget(energy_label)
-
-        length_slider = QSlider(Qt.Orientation.Horizontal, group)
-        length_slider.setRange(20, 300)
-        length_slider.valueChanged.connect(lambda value, arm=arm_index: self._update_length_label(arm, value))
-        length_slider.valueChanged.connect(lambda _value, arm=arm_index: self._emit_arm_length(arm))
-        self._length_sliders[arm_index] = length_slider
-
-        length_label = QLabel("1.00", group)
-        self._length_labels[arm_index] = length_label
-
-        length_row = QWidget(group)
-        length_layout = QHBoxLayout(length_row)
-        length_layout.setContentsMargins(0, 0, 0, 0)
-        length_layout.addWidget(length_slider, 1)
-        length_layout.addWidget(length_label)
-
-        direction.setToolTip("Rotation direction of this arm")
-        energy_slider.setToolTip("Angular velocity \u2014 how fast this arm spins")
-        length_slider.setToolTip("Physical length of this arm")
-
-        form.addRow("Direction", direction)
-        form.addRow("Energy", energy_row)
-        form.addRow("Length", length_row)
-        return group
 
     def set_document(self, seed: PendulumSeed) -> None:
         self._syncing = True
         try:
             self.pendulum_canvas.set_seed(seed)
-            self._space_combo.setCurrentText(seed.space)
-            for key, box in self._spin_boxes.items():
-                box.setValue(float(getattr(seed, key)))
             self._set_arm_motion(1, seed.omega1)
             self._set_arm_motion(2, seed.omega2)
             self._set_arm_length(1, seed.length1)
@@ -171,15 +124,10 @@ class InspectorPanel(QWidget):
         finally:
             self._syncing = False
 
-    def _set_expanded(self, expanded: bool) -> None:
-        self._toggle.setArrowType(Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow)
-        self._content.setVisible(expanded)
-        self.updateGeometry()
-
     def _set_arm_motion(self, arm_index: int, omega: float) -> None:
         direction = self._direction_boxes[arm_index]
         slider = self._energy_sliders[arm_index]
-        slider.setValue(min(600, int(round(abs(omega) * 100))))
+        slider.setValue(min(1000, int(round(abs(omega) * 100))))
         direction.setCurrentIndex(0 if omega >= 0 else 1)
         self._update_energy_label(arm_index, slider.value())
 
@@ -193,14 +141,6 @@ class InspectorPanel(QWidget):
             return
         self.seedChanged.emit("theta1", theta1)
         self.seedChanged.emit("theta2", theta2)
-
-    def _emit_space(self, value: str) -> None:
-        if not self._syncing:
-            self.seedChanged.emit("space", value)
-
-    def _emit_seed(self, key: str, value: object) -> None:
-        if not self._syncing:
-            self.seedChanged.emit(key, value)
 
     def _emit_arm_velocity(self, arm_index: int) -> None:
         if self._syncing:

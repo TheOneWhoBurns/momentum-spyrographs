@@ -55,6 +55,13 @@ def test_pendulum_canvas_drag_emits_updated_angles(qtbot) -> None:
     assert theta2 == canvas._seed.theta2
 
 
+def test_pendulum_canvas_angle_convention_matches_geometry() -> None:
+    origin = QPointF(10.0, 10.0)
+    assert abs(PendulumCanvas._point_to_theta(origin, QPointF(10.0, 40.0))) < 1e-9
+    assert abs(PendulumCanvas._point_to_theta(origin, QPointF(40.0, 10.0)) - 1.57079632679) < 1e-3
+    assert abs(PendulumCanvas._point_to_theta(origin, QPointF(-20.0, 10.0)) + 1.57079632679) < 1e-3
+
+
 def test_pendulum_canvas_total_visual_length_changes_with_shorter_arms(qtbot) -> None:
     canvas = PendulumCanvas()
     canvas.resize(420, 320)
@@ -98,32 +105,26 @@ def test_side_panels_are_collapsible(qtbot, tmp_path) -> None:
     qtbot.addWidget(window)
     window.show()
 
-    # Access the new SidebarFrame widgets directly from the window
-    left_sidebar = window._left_sidebar
-    right_sidebar = window._right_sidebar
+    # Both overlays start hidden (default view showing pendulum + preview)
+    assert not window._left_sidebar.expanded
+    assert not window._right_sidebar.expanded
 
-    # Both should start expanded
-    assert left_sidebar.expanded
-    assert right_sidebar.expanded
+    # Open library panel overlay
+    window._left_sidebar.set_expanded(True)
+    assert window._left_sidebar.expanded
+    assert not window._right_sidebar.expanded
+    assert window._left_sidebar._expanded_panel.isVisible()
 
-    # Collapse both sidebars
-    left_sidebar.set_expanded(False)
-    right_sidebar.set_expanded(False)
-    assert not left_sidebar.expanded
-    assert not right_sidebar.expanded
-    # The expanded panel should be hidden; collapsed strip should be visible
-    assert not left_sidebar._expanded_panel.isVisible()
-    assert left_sidebar._collapsed_strip.isVisible()
-    assert not right_sidebar._expanded_panel.isVisible()
-    assert right_sidebar._collapsed_strip.isVisible()
+    # Switch to style studio overlay (library auto-closes)
+    window._right_sidebar.set_expanded(True)
+    assert not window._left_sidebar.expanded
+    assert window._right_sidebar.expanded
+    assert window._right_sidebar._expanded_panel.isVisible()
 
-    # Expand them back
-    left_sidebar.set_expanded(True)
-    right_sidebar.set_expanded(True)
-    assert left_sidebar.expanded
-    assert right_sidebar.expanded
-    assert left_sidebar._expanded_panel.isVisible()
-    assert right_sidebar._expanded_panel.isVisible()
+    # Close style studio — back to default view
+    window._right_sidebar.set_expanded(False)
+    assert not window._left_sidebar.expanded
+    assert not window._right_sidebar.expanded
 
     window.preview_worker.shutdown()
     window.map_worker.shutdown()
@@ -131,13 +132,14 @@ def test_side_panels_are_collapsible(qtbot, tmp_path) -> None:
     window.close()
 
 
-def test_advanced_panel_expands_and_map_click_updates_seed(qtbot, tmp_path) -> None:
+def test_arm_controls_visible_and_map_click_updates_seed(qtbot, tmp_path) -> None:
     window = MainWindow(preset_root=tmp_path)
     qtbot.addWidget(window)
     window.show()
 
-    window.setup_panel._toggle.click()
-    assert window.setup_panel._content.isVisible()
+    # Arm controls should be accessible on the setup panel
+    assert window.setup_panel._energy_sliders[1] is not None
+    assert window.setup_panel._length_sliders[1] is not None
 
     qtbot.waitUntil(lambda: window.map_panel._payload is not None and window.map_panel._payload.resolution_level >= 512, timeout=30000)
     map_rect = window.map_panel._canvas._map_rect()
@@ -162,10 +164,36 @@ def test_map_zoom_and_pan_update_viewport(qtbot, tmp_path) -> None:
 
     map_rect = window.map_panel._canvas._map_rect()
     center = map_rect.center()
-    window.map_panel._canvas.mousePressEvent(_FakeMouseEvent(center))
-    window.map_panel._canvas.mouseMoveEvent(_FakeMouseEvent(center + QPointF(24.0, 0.0)))
-    window.map_panel._canvas.mouseReleaseEvent(_FakeMouseEvent(center + QPointF(24.0, 0.0)))
+    window.map_panel._canvas.mousePressEvent(_FakeMouseEvent(center, button=Qt.MouseButton.RightButton))
+    window.map_panel._canvas.mouseMoveEvent(_FakeMouseEvent(center + QPointF(24.0, 0.0), button=Qt.MouseButton.RightButton))
+    window.map_panel._canvas.mouseReleaseEvent(_FakeMouseEvent(center + QPointF(24.0, 0.0), button=Qt.MouseButton.RightButton))
     qtbot.waitUntil(lambda: abs(window.state.map_viewport.center_omega1) > 1e-6, timeout=3000)
+    window.preview_worker.shutdown()
+    window.map_worker.shutdown()
+    window.maybe_save_changes = lambda: True
+    window.close()
+
+
+def test_left_drag_selects_zoom_region_and_centers_seed(qtbot, tmp_path) -> None:
+    window = MainWindow(preset_root=tmp_path)
+    qtbot.addWidget(window)
+    window.show()
+
+    qtbot.waitUntil(lambda: window.map_panel._payload is not None and window.map_panel._payload.resolution_level >= 512, timeout=30000)
+    initial_span = window.state.map_viewport.span_omega1
+    map_rect = window.map_panel._canvas._map_rect()
+    start = map_rect.center() - QPointF(60.0, 40.0)
+    end = map_rect.center() + QPointF(60.0, 40.0)
+    expected_center_omega1 = window.map_panel._canvas._x_to_omega((start.x() + end.x()) / 2.0, map_rect)
+    expected_center_omega2 = window.map_panel._canvas._y_to_omega((start.y() + end.y()) / 2.0, map_rect)
+
+    window.map_panel._canvas.mousePressEvent(_FakeMouseEvent(start))
+    window.map_panel._canvas.mouseMoveEvent(_FakeMouseEvent(end))
+    window.map_panel._canvas.mouseReleaseEvent(_FakeMouseEvent(end))
+
+    qtbot.waitUntil(lambda: window.state.map_viewport.span_omega1 < initial_span, timeout=5000)
+    assert abs(window.state.seed.omega1 - expected_center_omega1) < 0.2
+    assert abs(window.state.seed.omega2 - expected_center_omega2) < 0.2
     window.preview_worker.shutdown()
     window.map_worker.shutdown()
     window.maybe_save_changes = lambda: True

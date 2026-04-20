@@ -5,7 +5,12 @@ from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QImage, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
-from momentum_spyrographs.core.map_tiles import default_viewport, pan_viewport, zoom_viewport
+from momentum_spyrographs.core.map_tiles import (
+    default_viewport,
+    pan_viewport,
+    viewport_from_bounds,
+    zoom_viewport,
+)
 from momentum_spyrographs.core.models import MapViewport, PendulumSeed, StabilityMapPayload
 from momentum_spyrographs.core.stability_map import find_region_loop_candidates
 
@@ -27,9 +32,10 @@ class StabilityMapCanvas(QWidget):
         self._status = "Map pending"
         self._error = ""
         self._viewport = default_viewport(PendulumSeed())
-        self._pan_start: QPointF | None = None
+        self._drag_start: QPointF | None = None
         self._pan_origin: MapViewport | None = None
-        self._dragging = False
+        self._selection_rect: QRectF | None = None
+        self._interaction_mode: str | None = None
         self.setMinimumHeight(160)
         self.setMouseTracking(True)
 
@@ -70,41 +76,74 @@ class StabilityMapCanvas(QWidget):
 
     def mousePressEvent(self, event) -> None:  # type: ignore[override]
         map_rect = self._map_rect()
-        if event.button() != Qt.MouseButton.LeftButton or not map_rect.contains(event.position()):
+        if not map_rect.contains(event.position()):
             return
-        self._pan_start = event.position()
-        self._pan_origin = self._viewport
-        self._dragging = False
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_start = event.position()
+            self._selection_rect = QRectF(event.position(), event.position())
+            self._interaction_mode = "select"
+            self.update()
+        elif event.button() == Qt.MouseButton.RightButton:
+            self._drag_start = event.position()
+            self._pan_origin = self._viewport
+            self._interaction_mode = "pan"
 
     def mouseMoveEvent(self, event) -> None:  # type: ignore[override]
-        if self._pan_start is None or self._pan_origin is None:
+        if self._drag_start is None or self._interaction_mode is None:
             return
         map_rect = self._map_rect()
-        delta = event.position() - self._pan_start
-        if not self._dragging and abs(delta.x()) + abs(delta.y()) < 5.0:
+        if self._interaction_mode == "pan" and self._pan_origin is not None:
+            delta = event.position() - self._drag_start
+            if abs(delta.x()) + abs(delta.y()) < 5.0:
+                return
+            delta_omega1 = -(delta.x() / max(map_rect.width(), 1.0)) * self._pan_origin.span_omega1
+            delta_omega2 = (delta.y() / max(map_rect.height(), 1.0)) * self._pan_origin.span_omega2
+            viewport = pan_viewport(
+                self._pan_origin,
+                delta_omega1=delta_omega1,
+                delta_omega2=delta_omega2,
+            )
+            self._viewport = viewport
+            self.viewportChanged.emit(viewport)
             return
-        self._dragging = True
-        delta_omega1 = -(delta.x() / max(map_rect.width(), 1.0)) * self._pan_origin.span_omega1
-        delta_omega2 = (delta.y() / max(map_rect.height(), 1.0)) * self._pan_origin.span_omega2
-        viewport = pan_viewport(
-            self._pan_origin,
-            delta_omega1=delta_omega1,
-            delta_omega2=delta_omega2,
-        )
-        self._viewport = viewport
-        self.viewportChanged.emit(viewport)
+        if self._interaction_mode == "select":
+            bounded_end = QPointF(
+                min(max(event.position().x(), map_rect.left()), map_rect.right()),
+                min(max(event.position().y(), map_rect.top()), map_rect.bottom()),
+            )
+            self._selection_rect = QRectF(self._drag_start, bounded_end).normalized()
+            self.update()
 
     def mouseReleaseEvent(self, event) -> None:  # type: ignore[override]
-        if self._pan_start is None:
+        if self._drag_start is None or self._interaction_mode is None:
             return
         map_rect = self._map_rect()
-        if not self._dragging and self._payload is not None and map_rect.contains(event.position()):
-            omega1 = self._x_to_omega(event.position().x(), map_rect)
-            omega2 = self._y_to_omega(event.position().y(), map_rect)
-            self.seedSelected.emit(omega1, omega2)
-        self._pan_start = None
+        if self._interaction_mode == "select" and self._payload is not None:
+            selection_rect = self._selection_rect.normalized() if self._selection_rect is not None else QRectF()
+            if selection_rect.width() >= 10.0 and selection_rect.height() >= 10.0:
+                omega1_a = self._x_to_omega(selection_rect.left(), map_rect)
+                omega1_b = self._x_to_omega(selection_rect.right(), map_rect)
+                omega2_a = self._y_to_omega(selection_rect.top(), map_rect)
+                omega2_b = self._y_to_omega(selection_rect.bottom(), map_rect)
+                viewport = viewport_from_bounds(
+                    self._viewport,
+                    omega1_a=omega1_a,
+                    omega1_b=omega1_b,
+                    omega2_a=omega2_a,
+                    omega2_b=omega2_b,
+                )
+                self._viewport = viewport
+                self.viewportChanged.emit(viewport)
+                self.seedSelected.emit(viewport.center_omega1, viewport.center_omega2)
+            else:
+                omega1 = self._x_to_omega(event.position().x(), map_rect)
+                omega2 = self._y_to_omega(event.position().y(), map_rect)
+                self.seedSelected.emit(omega1, omega2)
+        self._drag_start = None
         self._pan_origin = None
-        self._dragging = False
+        self._selection_rect = None
+        self._interaction_mode = None
+        self.update()
 
     def wheelEvent(self, event) -> None:  # type: ignore[override]
         map_rect = self._map_rect()
@@ -147,6 +186,11 @@ class StabilityMapCanvas(QWidget):
             painter.setPen(QPen(QColor(255, 255, 255, 26), 1, Qt.PenStyle.DotLine))
             painter.drawLine(QPointF(x_value, map_rect.top()), QPointF(x_value, map_rect.bottom()))
             painter.drawLine(QPointF(map_rect.left(), y_value), QPointF(map_rect.right(), y_value))
+
+        if self._selection_rect is not None and self._selection_rect.width() > 2.0 and self._selection_rect.height() > 2.0:
+            painter.setBrush(QColor(115, 210, 222, 38))
+            painter.setPen(QPen(QColor("#73d2de"), 2))
+            painter.drawRect(self._selection_rect)
 
         if self._payload is not None:
             marker = QPointF(
@@ -264,13 +308,15 @@ class StabilityMapWidget(QWidget):
         self._loop_candidate_index = 0
         self._candidate_signature: tuple[float, float, int] | None = None
         self._canvas.setToolTip(
-            "Click to select start speeds\nDrag to pan \u00b7 Scroll to zoom"
+            "Click to set start speeds\nLeft-drag to zoom into a region\nRight-drag to pan \u00b7 Scroll to zoom"
         )
-        self._reset_button = QPushButton("Reset", self)
+        self._reset_button = QPushButton("\u27f2 Reset", self)
         self._zoom_out_button = QPushButton("\u2212", self)
         self._zoom_in_button = QPushButton("+", self)
-        self._find_loop_button = QPushButton("Find Nearby Loop", self)
+        self._find_loop_button = QPushButton("\u2609 Find Nearby Loop", self)
         self._hint = QLabel("", self)
+        self.undo_button = QPushButton("\u21a9 Undo", self)
+        self.redo_button = QPushButton("\u21aa Redo", self)
         self._build_ui()
         self._reset_button.clicked.connect(self._reset_view)
         self._zoom_in_button.clicked.connect(lambda: self._zoom(1.22))
@@ -282,7 +328,7 @@ class StabilityMapWidget(QWidget):
         return self._canvas._payload
 
     def _build_ui(self) -> None:
-        for btn in (self._reset_button, self._zoom_out_button, self._zoom_in_button, self._find_loop_button):
+        for btn in (self._reset_button, self._zoom_out_button, self._zoom_in_button, self._find_loop_button, self.undo_button, self.redo_button):
             btn.setObjectName("secondaryBtn")
             btn.setFixedHeight(24)
         self._zoom_out_button.setFixedWidth(32)
@@ -293,6 +339,10 @@ class StabilityMapWidget(QWidget):
         self._zoom_in_button.setAutoRepeatDelay(140)
         self._zoom_out_button.setAutoRepeatInterval(75)
         self._zoom_in_button.setAutoRepeatInterval(75)
+        self.undo_button.setToolTip("Undo map click (Ctrl+Z)")
+        self.undo_button.setEnabled(False)
+        self.redo_button.setToolTip("Redo map click (Ctrl+Shift+Z)")
+        self.redo_button.setEnabled(False)
         self._hint.setStyleSheet("color: #d7e4f8;")
 
         toolbar = QHBoxLayout()
@@ -302,6 +352,8 @@ class StabilityMapWidget(QWidget):
         toolbar.addWidget(self._zoom_out_button)
         toolbar.addWidget(self._zoom_in_button)
         toolbar.addWidget(self._find_loop_button)
+        toolbar.addWidget(self.undo_button)
+        toolbar.addWidget(self.redo_button)
         toolbar.addStretch(1)
         toolbar.addWidget(self._hint)
 

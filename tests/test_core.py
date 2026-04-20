@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 
 from momentum_spyrographs.core.discovery import compute_seed_metrics, search_creative_candidates
-from momentum_spyrographs.core.map_tiles import default_viewport, structural_seed_key, visible_tiles
+from momentum_spyrographs.core.map_tiles import default_viewport, structural_seed_key, viewport_from_bounds, visible_tiles
 from momentum_spyrographs.core.models import (
     CreativeControls,
     MapRequest,
@@ -15,7 +15,12 @@ from momentum_spyrographs.core.models import (
 from momentum_spyrographs.core.presets import PresetStore
 from momentum_spyrographs.core.project import simulate_projected_points
 from momentum_spyrographs.core.render import write_gif, write_svg
-from momentum_spyrographs.core.stability_map import render_map_level, sample_stability_map
+from momentum_spyrographs.core.stability_map import (
+    grid_index_to_omega,
+    omega_to_grid_index,
+    render_map_level,
+    sample_stability_map,
+)
 
 
 def test_simulation_is_deterministic_and_has_expected_shape() -> None:
@@ -85,12 +90,35 @@ def test_visible_tiles_cover_requested_level() -> None:
     assert sum(tile.pixel_width * tile.pixel_height for tile in tiles) == 128 * 128
 
 
+def test_viewport_from_bounds_centers_and_clamps_region() -> None:
+    viewport = default_viewport(PendulumSeed(), pixel_size=512)
+    selected = viewport_from_bounds(
+        viewport,
+        omega1_a=-1.0,
+        omega1_b=3.0,
+        omega2_a=-2.0,
+        omega2_b=4.0,
+    )
+    assert abs(selected.center_omega1 - 1.0) < 1e-9
+    assert abs(selected.center_omega2 - 1.0) < 1e-9
+    assert abs(selected.span_omega1 - 4.0) < 1e-9
+    assert abs(selected.span_omega2 - 6.0) < 1e-9
+
+
 def test_default_map_subdivision_is_denser_than_64_tiles_at_512() -> None:
     payload = sample_stability_map(PendulumSeed(duration=4.0, dt=0.04), grid_size=64)
     viewport = default_viewport(PendulumSeed(), pixel_size=512)
     dense_tiles = visible_tiles(viewport, resolution_level=512)
     assert payload.completed_tiles >= 4
     assert len(dense_tiles) > 64
+
+
+def test_grid_index_roundtrip_matches_selected_cell() -> None:
+    payload = sample_stability_map(PendulumSeed(duration=4.0, dt=0.04), grid_size=33)
+    row, col = 10, 14
+    omega1, omega2 = grid_index_to_omega(payload, row, col)
+    roundtrip_row, roundtrip_col = omega_to_grid_index(payload, omega1, omega2)
+    assert (roundtrip_row, roundtrip_col) == (row, col)
 
 
 def test_projected_points_filter_non_finite_rows() -> None:

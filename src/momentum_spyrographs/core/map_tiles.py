@@ -68,6 +68,30 @@ def pan_viewport(viewport: MapViewport, *, delta_omega1: float, delta_omega2: fl
     )
 
 
+def viewport_from_bounds(
+    viewport: MapViewport,
+    *,
+    omega1_a: float,
+    omega1_b: float,
+    omega2_a: float,
+    omega2_b: float,
+    min_span: float = 0.6,
+    max_span: float = 40.0,
+) -> MapViewport:
+    omega1_min = min(omega1_a, omega1_b)
+    omega1_max = max(omega1_a, omega1_b)
+    omega2_min = min(omega2_a, omega2_b)
+    omega2_max = max(omega2_a, omega2_b)
+    span_omega1 = min(max_span, max(min_span, omega1_max - omega1_min))
+    span_omega2 = min(max_span, max(min_span, omega2_max - omega2_min))
+    return viewport.with_updates(
+        center_omega1=0.5 * (omega1_min + omega1_max),
+        center_omega2=0.5 * (omega2_min + omega2_max),
+        span_omega1=span_omega1,
+        span_omega2=span_omega2,
+    )
+
+
 def zoom_viewport(
     viewport: MapViewport,
     *,

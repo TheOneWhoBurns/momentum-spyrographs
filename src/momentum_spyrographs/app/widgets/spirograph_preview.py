@@ -8,21 +8,12 @@ from PySide6.QtGui import QColor, QLinearGradient, QPainter, QPen
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from momentum_spyrographs.core.discovery import describe_metrics
-from momentum_spyrographs.core.models import PreviewPayload, RenderSettings, SeedMetrics
+from momentum_spyrographs.core.models import PreviewPayload, RenderSettings
 from momentum_spyrographs.core.render import glow_color, normalize_points, segment_style
 
 
 def _rgba_to_qcolor(rgba: tuple[int, int, int, int]) -> QColor:
     return QColor(rgba[0], rgba[1], rgba[2], rgba[3])
-
-
-def _metric_badges(metrics: SeedMetrics) -> list[str]:
-    badges: list[str] = []
-    badges.append("Stable" if metrics.stability_score >= 0.62 else "Wild")
-    badges.append("Circular" if metrics.circularity_score >= 0.6 else "Eccentric")
-    badges.append("Dense" if metrics.density_score >= 0.54 else "Open")
-    badges.append("Soft" if metrics.energy_score <= 0.45 else "Energetic")
-    return badges
 
 
 class PreviewCanvas(QWidget):
@@ -36,7 +27,7 @@ class PreviewCanvas(QWidget):
         self._timer = QTimer(self)
         self._timer.setInterval(33)
         self._timer.timeout.connect(self._advance)
-        self.setMinimumHeight(280)
+        self.setMinimumHeight(140)
 
     def set_payload(self, payload: PreviewPayload | None) -> None:
         self._points = payload.points if payload is not None else np.empty((0, 2), dtype=float)
@@ -65,6 +56,12 @@ class PreviewCanvas(QWidget):
     def restart(self) -> None:
         self._progress = 0.0
         self.play()
+
+    def show_complete(self) -> None:
+        """Show the full curve instantly without animating."""
+        self._timer.stop()
+        self._progress = 1.0
+        self.update()
 
     def _advance(self) -> None:
         increment = 0.004 * max(self._render_settings.animation_speed, 0.02)
@@ -119,7 +116,7 @@ class PreviewCanvas(QWidget):
 
         if self._status == "loading":
             painter.setPen(QColor("#ff9d76"))
-            painter.drawText(self.rect().adjusted(0, 0, -20, -16), Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignRight, "Updating…")
+            painter.drawText(self.rect().adjusted(0, 0, -20, -16), Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignRight, "Updating\u2026")
 
     def _paint_background(self, painter: QPainter) -> None:
         if self._render_settings.background_mode == "gradient":
@@ -158,7 +155,6 @@ class SpirographPreview(QWidget):
         self.canvas = PreviewCanvas(self)
         self.status_label = QLabel("Preview ready", self)
         self._descriptor_label = QLabel("Calm Orbit", self)
-        self._badges = [QLabel("", self) for _ in range(4)]
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -167,9 +163,9 @@ class SpirographPreview(QWidget):
         self._descriptor_label.setObjectName("descriptorLabel")
         self._descriptor_label.setStyleSheet("color: #ffb38f; font-weight: 600; font-size: 14px;")
 
-        play_button = QPushButton("Play", self)
-        pause_button = QPushButton("Pause", self)
-        restart_button = QPushButton("Restart", self)
+        play_button = QPushButton("\u25b6 Play", self)
+        pause_button = QPushButton("\u23f8 Pause", self)
+        restart_button = QPushButton("\u21bb Restart", self)
         for btn in (play_button, pause_button, restart_button):
             btn.setObjectName("secondaryBtn")
             btn.setFixedHeight(28)
@@ -177,30 +173,31 @@ class SpirographPreview(QWidget):
         pause_button.clicked.connect(self.canvas.pause)
         restart_button.clicked.connect(self.canvas.restart)
 
-        export_button = QPushButton("Export\u2026", self)
+        export_button = QPushButton("\u2197 Export\u2026", self)
         export_button.setFixedHeight(28)
         export_button.clicked.connect(self.exportRequested.emit)
 
-        header = QHBoxLayout()
-        header.setSpacing(6)
-        header.addWidget(self._descriptor_label)
-        for badge in self._badges:
-            badge.setStyleSheet(
-                "background: #141e34; color: #b8c9e4; border: 1px solid #1c2d4a;"
-                " border-radius: 8px; padding: 2px 8px; font-size: 10px;"
-            )
-            header.addWidget(badge)
-        header.addStretch(1)
-        header.addWidget(self.status_label)
-        header.addWidget(play_button)
-        header.addWidget(pause_button)
-        header.addWidget(restart_button)
-        header.addWidget(export_button)
+        # Header: descriptor + status
+        header_row = QHBoxLayout()
+        header_row.setSpacing(6)
+        header_row.addWidget(self._descriptor_label)
+        header_row.addStretch(1)
+        header_row.addWidget(self.status_label)
+
+        # Action buttons
+        action_row = QHBoxLayout()
+        action_row.setSpacing(6)
+        action_row.addWidget(play_button)
+        action_row.addWidget(pause_button)
+        action_row.addWidget(restart_button)
+        action_row.addStretch(1)
+        action_row.addWidget(export_button)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(6)
-        layout.addLayout(header)
+        layout.setSpacing(4)
+        layout.addLayout(header_row)
+        layout.addLayout(action_row)
         layout.addWidget(self.canvas, 1)
 
     def set_preview_payload(self, payload: PreviewPayload | None) -> None:
@@ -208,9 +205,7 @@ class SpirographPreview(QWidget):
         if payload is not None:
             self.status_label.setText(f"{payload.selected_seed.space.title()} preview")
             self._descriptor_label.setText(describe_metrics(payload.metrics))
-            for badge, text in zip(self._badges, _metric_badges(payload.metrics)):
-                badge.setText(text)
-            self.canvas.restart()
+            self.canvas.show_complete()
 
     def set_render_settings(self, render_settings: RenderSettings) -> None:
         self.canvas.set_render_settings(render_settings)

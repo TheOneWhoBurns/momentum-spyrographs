@@ -120,6 +120,31 @@ QPushButton:disabled {
   background: #111a2e;
 }
 
+/* ═══ Icon Strip ═══ */
+#iconStrip {
+  background: #0a0f1c;
+  border-left: 1px solid #182844;
+}
+#iconStripBtn {
+  background: #141e34;
+  color: #8a9dba;
+  border: 1px solid #1c2d4a;
+  border-radius: 18px;
+  font-size: 16px;
+  font-weight: 700;
+  padding: 0;
+}
+#iconStripBtn:hover {
+  background: #1a2844;
+  color: #eaf1ff;
+  border-color: #2d4261;
+}
+#iconStripBtn:checked {
+  background: #1a2844;
+  color: #ffb38f;
+  border-color: #ff9d76;
+}
+
 /* ═══ Ghost Buttons ═══ */
 #ghostBtn {
   background: transparent;
